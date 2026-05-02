@@ -58,21 +58,7 @@ fun VaultCreationScreen(
                 )
             )
         },
-        containerColor = VaultBackground,
-        floatingActionButton = {
-            if (!isProcessing) {
-                ExtendedFloatingActionButton(
-                    onClick = onAddFiles,
-                    containerColor = VaultPrimary,
-                    contentColor = VaultOnPrimary,
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Icon(Icons.Default.Add, "Add files")
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Add Files")
-                }
-            }
-        }
+        containerColor = VaultBackground
     ) { padding ->
         Column(
             modifier = Modifier
@@ -198,6 +184,24 @@ fun VaultCreationScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Add files button (inline to avoid overlap with create button)
+            OutlinedButton(
+                onClick = onAddFiles,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                enabled = !isProcessing,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = VaultPrimaryLight),
+                border = ButtonDefaults.outlinedButtonBorder(enabled = true)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "Add files")
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Add Files", style = MaterialTheme.typography.titleMedium)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Create button
             Button(
