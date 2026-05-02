@@ -43,6 +43,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.R as Media3UiR
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.example.bib_vault.player.EncryptedDataSourceFactory
 import com.example.bib_vault.ui.theme.*
 import com.example.bib_vault.util.FormatUtils
@@ -101,6 +104,26 @@ private fun clearWindowBrightnessOverride(activity: Activity?) {
     val lp = window.attributes
     lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
     window.attributes = lp
+}
+
+private fun setFullscreenSystemBarsVisible(activity: Activity?, visible: Boolean) {
+    val window = activity?.window ?: return
+    WindowCompat.setDecorFitsSystemWindows(window, false)
+    val insetsController = WindowCompat.getInsetsController(window, window.decorView) ?: return
+    insetsController.systemBarsBehavior =
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    if (visible) {
+        insetsController.show(WindowInsetsCompat.Type.systemBars())
+    } else {
+        insetsController.hide(WindowInsetsCompat.Type.systemBars())
+    }
+}
+
+private fun restoreSystemBarsVisibility(activity: Activity?) {
+    val window = activity?.window ?: return
+    WindowCompat.setDecorFitsSystemWindows(window, true)
+    WindowCompat.getInsetsController(window, window.decorView)
+        ?.show(WindowInsetsCompat.Type.systemBars())
 }
 
 private sealed interface VideoGestureHud {
@@ -331,9 +354,15 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
     }
 
     DisposableEffect(activity) {
+        setFullscreenSystemBarsVisible(activity, visible = false)
         onDispose {
             clearWindowBrightnessOverride(activity)
+            restoreSystemBarsVisibility(activity)
         }
+    }
+
+    LaunchedEffect(activity, isControllerVisible) {
+        setFullscreenSystemBarsVisible(activity, visible = isControllerVisible)
     }
 
     fun bindSeekButtons(stepSec: Int) {
