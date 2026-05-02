@@ -8,8 +8,6 @@ import com.example.bib_vault.vault.VaultEntry
 import com.example.bib_vault.vault.VaultHeader
 import com.example.bib_vault.vault.VaultManager
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,18 +24,11 @@ import javax.crypto.SecretKey
  * All vault operations run on [Dispatchers.IO] to avoid blocking the UI.
  */
 class VaultViewModel(application: Application) : AndroidViewModel(application) {
-
     private val _vaultState = MutableStateFlow<VaultState>(VaultState.Locked)
     val vaultState: StateFlow<VaultState> = _vaultState.asStateFlow()
 
     private val _progress = MutableStateFlow(VaultProgress())
     val progress: StateFlow<VaultProgress> = _progress.asStateFlow()
-
-    /** Auto-lock timer job */
-    private var autoLockJob: Job? = null
-
-    /** Auto-lock timeout in milliseconds (default 2 minutes) */
-    var autoLockTimeoutMs: Long = 2 * 60 * 1000L
 
     // ──────────────────────────────────────
     //  Vault operations
@@ -115,8 +106,6 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             key = key,
             vaultName = vaultName
         )
-
-        resetAutoLockTimer()
     }
 
     /**
@@ -297,21 +286,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
      * Lock the vault: clear key from memory and reset state.
      */
     fun lock() {
-        autoLockJob?.cancel()
         _vaultState.value = VaultState.Locked
         _progress.value = VaultProgress()
-    }
-
-    /**
-     * Reset the inactivity auto-lock timer.
-     * Should be called on user interaction.
-     */
-    fun resetAutoLockTimer() {
-        autoLockJob?.cancel()
-        autoLockJob = viewModelScope.launch {
-            delay(autoLockTimeoutMs)
-            lock()
-        }
     }
 
     /** Clear error state and return to locked */
@@ -338,6 +314,5 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        autoLockJob?.cancel()
     }
 }

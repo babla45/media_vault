@@ -366,7 +366,6 @@ private fun BibVaultApp() {
                             vaultName = state.vaultName,
                             entries = state.entries,
                             onFileClick = { entry ->
-                                viewModel.resetAutoLockTimer()
                                 navController.navigate(Routes.mediaPlayer(entry.id))
                             },
                         onDeleteFiles = { selectedEntries ->
@@ -398,6 +397,9 @@ private fun BibVaultApp() {
                                         false
                                     }
                                 }
+                            },
+                            onVerifyVaultPassword = { enteredPassword ->
+                                enteredPassword.isNotBlank() && enteredPassword == currentPassword
                             },
                             onLock = {
                                 currentPassword = ""
@@ -446,7 +448,6 @@ private fun BibVaultApp() {
                 val state = vaultState
                 if (state is VaultState.Unlocked) {
                     val entry = state.entries.find { it.id == entryId } ?: return@composable
-                    viewModel.resetAutoLockTimer()
 
                     MediaPlayerScreen(
                         entry = entry,

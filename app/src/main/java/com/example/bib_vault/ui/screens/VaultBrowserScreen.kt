@@ -65,6 +65,7 @@ fun VaultBrowserScreen(
     onLoadPreviewBytes: suspend (VaultEntry) -> ByteArray?,
     screenshotProtectionEnabled: Boolean,
     onUpdateScreenshotProtection: (Boolean, String?) -> Boolean,
+    onVerifyVaultPassword: (String) -> Boolean,
     onLock: () -> Unit
 ) {
     val maxPreviewBytes = 25L * 1024L * 1024L
@@ -90,6 +91,10 @@ fun VaultBrowserScreen(
     var showScreenshotPasswordDialog by remember { mutableStateOf(false) }
     var screenshotPassword by remember { mutableStateOf("") }
     var screenshotPasswordError by remember { mutableStateOf<String?>(null) }
+    var deletePassword by remember { mutableStateOf("") }
+    var deletePasswordError by remember { mutableStateOf<String?>(null) }
+    var restorePassword by remember { mutableStateOf("") }
+    var restorePasswordError by remember { mutableStateOf<String?>(null) }
     var showListView by rememberSaveable { mutableStateOf(savedShowListView) }
     var listNamesOnly by rememberSaveable { mutableStateOf(savedListNamesOnly) }
     var previewsEnabled by rememberSaveable { mutableStateOf(savedPreviewsEnabled) }
@@ -598,22 +603,53 @@ fun VaultBrowserScreen(
     if (showDeleteDialog && selectedIds.isNotEmpty()) {
         val selectedEntries = entries.filter { selectedIds.contains(it.id) }
         AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
+            onDismissRequest = {
+                showDeleteDialog = false
+                deletePassword = ""
+                deletePasswordError = null
+            },
             shape = RoundedCornerShape(20.dp),
             containerColor = VaultSurface,
             icon = { Icon(Icons.Default.Delete, null, tint = VaultError) },
             title = { Text("Remove ${selectedEntries.size} file(s)") },
             text = {
-                Text("Remove ${selectedEntries.size} selected file(s) from the vault? This cannot be undone.")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Remove ${selectedEntries.size} selected file(s) from the vault? This cannot be undone.")
+                    OutlinedTextField(
+                        value = deletePassword,
+                        onValueChange = {
+                            deletePassword = it
+                            deletePasswordError = null
+                        },
+                        label = { Text("Vault password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        isError = deletePasswordError != null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (deletePasswordError != null) {
+                        Text(
+                            text = deletePasswordError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = VaultError
+                        )
+                    }
+                }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        onDeleteFiles(selectedEntries)
-                        selectedIds.clear()
-                        rangeSelectEnabled = false
-                        rangeAnchorId = null
-                        showDeleteDialog = false
+                        if (onVerifyVaultPassword(deletePassword)) {
+                            onDeleteFiles(selectedEntries)
+                            selectedIds.clear()
+                            rangeSelectEnabled = false
+                            rangeAnchorId = null
+                            showDeleteDialog = false
+                            deletePassword = ""
+                            deletePasswordError = null
+                        } else {
+                            deletePasswordError = "Wrong vault password"
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = VaultError)
                 ) {
@@ -621,7 +657,13 @@ fun VaultBrowserScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
+                TextButton(
+                    onClick = {
+                        showDeleteDialog = false
+                        deletePassword = ""
+                        deletePasswordError = null
+                    }
+                ) {
                     Text("Cancel")
                 }
             }
@@ -632,29 +674,66 @@ fun VaultBrowserScreen(
     if (showRestoreDialog && selectedIds.isNotEmpty()) {
         val selectedEntries = entries.filter { selectedIds.contains(it.id) }
         AlertDialog(
-            onDismissRequest = { showRestoreDialog = false },
+            onDismissRequest = {
+                showRestoreDialog = false
+                restorePassword = ""
+                restorePasswordError = null
+            },
             shape = RoundedCornerShape(20.dp),
             containerColor = VaultSurface,
             icon = { Icon(Icons.Default.Restore, null, tint = VaultPrimaryLight) },
             title = { Text("Restore ${selectedEntries.size} file(s)") },
             text = {
-                Text("Restore ${selectedEntries.size} selected file(s) to the same folder as this vault?")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Restore ${selectedEntries.size} selected file(s) to the same folder as this vault?")
+                    OutlinedTextField(
+                        value = restorePassword,
+                        onValueChange = {
+                            restorePassword = it
+                            restorePasswordError = null
+                        },
+                        label = { Text("Vault password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        isError = restorePasswordError != null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (restorePasswordError != null) {
+                        Text(
+                            text = restorePasswordError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = VaultError
+                        )
+                    }
+                }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        onRestoreFiles(selectedEntries)
-                        selectedIds.clear()
-                        rangeSelectEnabled = false
-                        rangeAnchorId = null
-                        showRestoreDialog = false
+                        if (onVerifyVaultPassword(restorePassword)) {
+                            onRestoreFiles(selectedEntries)
+                            selectedIds.clear()
+                            rangeSelectEnabled = false
+                            rangeAnchorId = null
+                            showRestoreDialog = false
+                            restorePassword = ""
+                            restorePasswordError = null
+                        } else {
+                            restorePasswordError = "Wrong vault password"
+                        }
                     }
                 ) {
                     Text("Restore")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRestoreDialog = false }) {
+                TextButton(
+                    onClick = {
+                        showRestoreDialog = false
+                        restorePassword = ""
+                        restorePasswordError = null
+                    }
+                ) {
                     Text("Cancel")
                 }
             }
