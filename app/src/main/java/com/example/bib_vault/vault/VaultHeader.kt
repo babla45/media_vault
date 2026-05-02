@@ -34,7 +34,7 @@ data class VaultHeader(
     /** Validate that this header belongs to a valid vault file */
     fun isValid(): Boolean =
         magic.contentEquals(CryptoConstants.MAGIC_BYTES) &&
-                version == CryptoConstants.FORMAT_VERSION
+                (version == CryptoConstants.FORMAT_VERSION_V1 || version == CryptoConstants.FORMAT_VERSION_V2)
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

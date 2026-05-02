@@ -6,6 +6,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -134,8 +136,26 @@ fun MediaPlayerScreen(
     onDecryptImage: suspend (VaultEntry) -> ByteArray?,
     onBack: () -> Unit
 ) {
-    val mediaType = MimeUtils.getMediaType(entry.mimeType)
+    val sortedEntries = remember(entries) {
+        entries.values.sortedWith(compareBy<VaultEntry> { it.addedTimestamp }.thenBy { it.fileName })
+    }
+    val imageEntries = remember(sortedEntries) {
+        sortedEntries.filter { MimeUtils.getMediaType(it.mimeType) == MediaType.IMAGE }
+    }
+    var currentImageId by remember(entry.id) { mutableStateOf(entry.id) }
+    val currentEntry = remember(entry, entries, currentImageId) {
+        entries[currentImageId] ?: entry
+    }
+
+    val mediaType = MimeUtils.getMediaType(currentEntry.mimeType)
     val isVideo = mediaType == MediaType.VIDEO
+    val currentImageIndex = if (mediaType == MediaType.IMAGE) {
+        imageEntries.indexOfFirst { it.id == currentEntry.id }
+    } else {
+        -1
+    }
+    val canSwipePrev = currentImageIndex > 0
+    val canSwipeNext = currentImageIndex >= 0 && currentImageIndex < imageEntries.lastIndex
 
     Scaffold(
         topBar = {
@@ -144,13 +164,13 @@ fun MediaPlayerScreen(
                     title = {
                         Column {
                             Text(
-                                entry.fileName,
+                                currentEntry.fileName,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                "${MimeUtils.getTypeLabel(entry.mimeType)} • ${FormatUtils.formatFileSize(entry.originalSize)}",
+                                "${MimeUtils.getTypeLabel(currentEntry.mimeType)} • ${FormatUtils.formatFileSize(currentEntry.originalSize)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = VaultOnSurfaceVariant
                             )
@@ -185,7 +205,7 @@ fun MediaPlayerScreen(
             when (mediaType) {
                 MediaType.VIDEO, MediaType.AUDIO -> {
                     EncryptedMediaPlayer(
-                        entry = entry,
+                        entry = currentEntry,
                         vaultUri = vaultUri,
                         header = header,
                         key = key,
@@ -195,8 +215,20 @@ fun MediaPlayerScreen(
                 }
                 MediaType.IMAGE -> {
                     EncryptedImageViewer(
-                        entry = entry,
-                        onDecryptImage = onDecryptImage
+                        entry = currentEntry,
+                        onDecryptImage = onDecryptImage,
+                        canSwipePrev = canSwipePrev,
+                        canSwipeNext = canSwipeNext,
+                        onSwipePrev = {
+                            if (canSwipePrev) {
+                                currentImageId = imageEntries[currentImageIndex - 1].id
+                            }
+                        },
+                        onSwipeNext = {
+                            if (canSwipeNext) {
+                                currentImageId = imageEntries[currentImageIndex + 1].id
+                            }
+                        }
                     )
                 }
                 MediaType.OTHER -> {
@@ -922,7 +954,11 @@ private fun AudioPlayerUI(
 @Composable
 private fun EncryptedImageViewer(
     entry: VaultEntry,
-    onDecryptImage: suspend (VaultEntry) -> ByteArray?
+    onDecryptImage: suspend (VaultEntry) -> ByteArray?,
+    canSwipePrev: Boolean,
+    canSwipeNext: Boolean,
+    onSwipePrev: () -> Unit,
+    onSwipeNext: () -> Unit
 ) {
     var imageBytes by remember { mutableStateOf<ByteArray?>(null) }
     var isLoading by remember { mutableStateOf(true) }
@@ -931,9 +967,18 @@ private fun EncryptedImageViewer(
     // Zoom/pan state
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    val swipeThreshold = 90f
+    var horizontalDragAccumulator by remember { mutableFloatStateOf(0f) }
+    var showNavButtons by remember { mutableStateOf(true) }
 
     LaunchedEffect(entry.id) {
         isLoading = true
+        imageBytes = null
+        error = null
+        scale = 1f
+        offset = Offset.Zero
+        horizontalDragAccumulator = 0f
+        showNavButtons = true
         try {
             val bytes = withContext(Dispatchers.IO) {
                 onDecryptImage(entry)
@@ -970,27 +1015,101 @@ private fun EncryptedImageViewer(
                 }
 
                 if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = entry.fileName,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer(
-                                scaleX = scale,
-                                scaleY = scale,
-                                translationX = offset.x,
-                                translationY = offset.y
-                            )
-                            .pointerInput(Unit) {
-                                detectTransformGestures { _, pan, zoom, _ ->
-                                    scale = (scale * zoom).coerceIn(0.5f, 5f)
-                                    offset = Offset(
-                                        x = offset.x + pan.x,
-                                        y = offset.y + pan.y
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = entry.fileName,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer(
+                                    scaleX = scale,
+                                    scaleY = scale,
+                                    translationX = offset.x,
+                                    translationY = offset.y
+                                )
+                                .pointerInput(entry.id) {
+                                    detectTapGestures(
+                                        onTap = { showNavButtons = !showNavButtons }
                                     )
                                 }
+                                .pointerInput(entry.id, scale, canSwipePrev, canSwipeNext) {
+                                    detectHorizontalDragGestures(
+                                        onHorizontalDrag = { change, dragAmount ->
+                                            if (scale <= 1.05f) {
+                                                horizontalDragAccumulator += dragAmount
+                                                change.consume()
+                                            }
+                                        },
+                                        onDragCancel = {
+                                            horizontalDragAccumulator = 0f
+                                        },
+                                        onDragEnd = {
+                                            if (scale <= 1.05f) {
+                                                when {
+                                                    horizontalDragAccumulator >= swipeThreshold && canSwipePrev -> onSwipePrev()
+                                                    horizontalDragAccumulator <= -swipeThreshold && canSwipeNext -> onSwipeNext()
+                                                }
+                                            }
+                                            horizontalDragAccumulator = 0f
+                                        }
+                                    )
+                                }
+                                .pointerInput(Unit) {
+                                    detectTransformGestures { _, pan, zoom, _ ->
+                                        val newScale = (scale * zoom).coerceIn(1f, 5f)
+                                        scale = newScale
+                                        offset = if (newScale <= 1.01f) {
+                                            Offset.Zero
+                                        } else {
+                                            Offset(
+                                                x = offset.x + pan.x,
+                                                y = offset.y + pan.y
+                                            )
+                                        }
+                                    }
+                                }
+                        )
+
+                        // Prev/Next overlay buttons (work even if swipe doesn't)
+                        if (showNavButtons && canSwipePrev) {
+                            FilledIconButton(
+                                onClick = onSwipePrev,
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .padding(start = 14.dp)
+                                    .size(44.dp),
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = Color.Black.copy(alpha = 0.45f),
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Previous image"
+                                )
                             }
-                    )
+                        }
+
+                        if (showNavButtons && canSwipeNext) {
+                            FilledIconButton(
+                                onClick = onSwipeNext,
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 14.dp)
+                                    .size(44.dp),
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = Color.Black.copy(alpha = 0.45f),
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Next image",
+                                    modifier = Modifier.graphicsLayer(rotationZ = 180f)
+                                )
+                            }
+                        }
+                    }
                 } else {
                     Text("Could not decode image", color = VaultError)
                 }

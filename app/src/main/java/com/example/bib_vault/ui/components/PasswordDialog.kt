@@ -91,13 +91,15 @@ fun PasswordDialog(
                         }
                     },
                     keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
+                        keyboardType = if (isCreateMode) KeyboardType.NumberPassword else KeyboardType.Password,
                         imeAction = ImeAction.Done
                     ),
                     keyboardActions = KeyboardActions(
                         onDone = {
-                            if (password.isNotEmpty()) {
+                            if (password.isNotEmpty() && (!isCreateMode || isValidVaultPassword(password))) {
                                 onConfirm(password)
+                            } else if (isCreateMode) {
+                                localError = "Password must be at least 4 digits"
                             }
                         }
                     ),
@@ -146,7 +148,7 @@ fun PasswordDialog(
                 onClick = {
                     when {
                         password.isEmpty() -> localError = "Password cannot be empty"
-                        isCreateMode && password.length < 6 -> localError = "Password must be at least 6 characters"
+                        isCreateMode && !isValidVaultPassword(password) -> localError = "Password must be at least 4 digits"
                         else -> onConfirm(password)
                     }
                 },
@@ -220,4 +222,8 @@ private fun calculatePasswordStrength(password: String): Float {
     if (password.any { it.isDigit() }) score += 0.15f
     if (password.any { !it.isLetterOrDigit() }) score += 0.15f
     return score.coerceIn(0f, 1f)
+}
+
+private fun isValidVaultPassword(password: String): Boolean {
+    return password.length >= 4 && password.all { it.isDigit() }
 }

@@ -163,7 +163,7 @@ private fun BibVaultApp() {
                     val uriList = uris.toList()
                     val firstUri = uriList.first()
                     val name = queryFileInfo(context, firstUri).first
-                    if (name.endsWith(".bivl") && uriList.size == 1) {
+                    if (name.endsWith(".biv") && uriList.size == 1) {
                         pendingVaultUri = firstUri
                         showOpenPasswordDialog = true
                     } else {
@@ -352,7 +352,7 @@ private fun BibVaultApp() {
                         selectedFileInfo = selectedFileInfo.toMutableList().also { it.removeAt(index) }
                     },
                     onCreateVault = {
-                        createVaultSaver.launch("vault.bivl")
+                        createVaultSaver.launch("vault.biv")
                     },
                     onBack = {
                         navController.popBackStack()

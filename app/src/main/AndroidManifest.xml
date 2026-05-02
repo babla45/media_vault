@@ -33,13 +33,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Associate .bivl files with this app -->
+            <!-- Associate .biv files with this app -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:mimeType="application/octet-stream" />
-                <data android:pathPattern=".*\\.bivl" />
+                <data android:pathPattern=".*\\.biv" />
             </intent-filter>
 
             <!-- Handle shared files for encryption or opening -->

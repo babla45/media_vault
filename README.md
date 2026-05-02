@@ -1,10 +1,10 @@
 # BibVault
 
-BibVault is a secure, offline-first Android application designed to encrypt, store, and seamlessly play multiple media files (videos, audio, images) entirely from within a custom encrypted container (`.bivl`). It features on-the-fly decryption with no temporary files ever written to disk, ensuring maximum privacy and security for your sensitive media.
+BibVault is a secure, offline-first Android application designed to encrypt, store, and seamlessly play multiple media files (videos, audio, images) entirely from within a custom encrypted container (`.biv`). It features on-the-fly decryption with no temporary files ever written to disk, ensuring maximum privacy and security for your sensitive media.
 
 ## Core Features
 
-- **Custom `.bivl` Container:** Packages multiple media files into a single, highly secure, encrypted `.bivl` file.
+- **Custom `.biv` Container:** Packages multiple media files into a single, highly secure, encrypted `.biv` file.
 - **On-the-Fly Streaming Decryption:** Custom `EncryptedDataSource` intercepts ExoPlayer/Media3 read requests to decrypt video and audio chunks instantly in memory. *Media files are never extracted to persistent storage.*
 - **True Random Access:** Employs an AES-256-CTR chunked encryption strategy with deterministic IVs. This allows the player to seek/skip to any point in a large 4K video instantly, without having to decrypt preceding data.
 - **Robust Cryptography:** 
@@ -21,7 +21,7 @@ BibVault is a secure, offline-first Android application designed to encrypt, sto
 ## Technical Implementation
 
 ### Container Structure
-A single `.bivl` file consists of:
+A single `.biv` file consists of:
 1. **Header (60 bytes):** Magic bytes, Format Version, Salt (32 bytes), GCM IV (12 bytes), and Index Size.
 2. **Encrypted Index (AES-GCM):** A JSON array of file entries detailing filenames, MIME types, offsets, sizes, and specific chunk variables (Base IV, chunk counts, HMAC).
 3. **Encrypted Data Blocks (AES-CTR):** Sequential encrypted chunks of media files.

@@ -18,8 +18,12 @@ object CryptoConstants {
     /** Magic bytes identifying a BibVault container file */
     val MAGIC_BYTES = "BIBVAULT".toByteArray(Charsets.US_ASCII)
 
-    /** Current container format version */
-    const val FORMAT_VERSION = 1
+    /** Supported container format versions */
+    const val FORMAT_VERSION_V1 = 1
+    const val FORMAT_VERSION_V2 = 2
+
+    /** Current container format version for newly created vaults */
+    const val FORMAT_VERSION_CURRENT = FORMAT_VERSION_V2
 
     /** Size of PBKDF2 salt in bytes */
     const val SALT_SIZE = 32
