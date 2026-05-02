@@ -1,6 +1,7 @@
 package com.example.bib_vault
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -110,6 +111,8 @@ private fun BibVaultApp() {
     // ── File selection state ──
     var selectedFileUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var selectedFileInfo by remember { mutableStateOf<List<Pair<String, Long>>>(emptyList()) }
+    val previewCache = remember { mutableStateMapOf<String, Bitmap?>() }
+    var previewCacheVaultUri by remember { mutableStateOf<Uri?>(null) }
 
     // ── Dialog state ──
     var showOpenPasswordDialog by remember { mutableStateOf(false) }
@@ -290,6 +293,11 @@ private fun BibVaultApp() {
     LaunchedEffect(vaultState) {
         when (vaultState) {
             is VaultState.Unlocked -> {
+                val unlocked = vaultState as VaultState.Unlocked
+                if (previewCacheVaultUri != unlocked.vaultUri) {
+                    previewCache.clear()
+                    previewCacheVaultUri = unlocked.vaultUri
+                }
                 val currentRoute = navController.currentDestination?.route
                 if (currentRoute != Routes.VAULT_BROWSER &&
                     currentRoute?.startsWith("media_player") != true
@@ -300,6 +308,8 @@ private fun BibVaultApp() {
                 }
             }
             is VaultState.Locked -> {
+                previewCache.clear()
+                previewCacheVaultUri = null
                 val currentRoute = navController.currentDestination?.route
                 if (currentRoute != null && currentRoute != Routes.HOME && currentRoute != Routes.CREATE_VAULT) {
                     navController.navigate(Routes.HOME) {
@@ -381,6 +391,7 @@ private fun BibVaultApp() {
                                     fallbackAddFilePicker.launch("*/*")
                                 }
                             },
+                            previewCache = previewCache,
                             onLoadPreviewBytes = { entry ->
                                 viewModel.decryptImageBytes(entry)
                             },

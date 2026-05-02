@@ -62,6 +62,7 @@ fun VaultBrowserScreen(
     onDeleteFiles: (List<VaultEntry>) -> Unit,
     onRestoreFiles: (List<VaultEntry>) -> Unit,
     onAddFiles: () -> Unit,
+    previewCache: MutableMap<String, Bitmap?>,
     onLoadPreviewBytes: suspend (VaultEntry) -> ByteArray?,
     screenshotProtectionEnabled: Boolean,
     onUpdateScreenshotProtection: (Boolean, String?) -> Boolean,
@@ -98,7 +99,6 @@ fun VaultBrowserScreen(
     var showListView by rememberSaveable { mutableStateOf(savedShowListView) }
     var listNamesOnly by rememberSaveable { mutableStateOf(savedListNamesOnly) }
     var previewsEnabled by rememberSaveable { mutableStateOf(savedPreviewsEnabled) }
-    val previewCache = remember { mutableStateMapOf<String, Bitmap?>() }
     val selectedIds = remember { mutableStateListOf<String>() }
     val isSelectionMode = selectedIds.isNotEmpty()
     var rangeSelectEnabled by rememberSaveable { mutableStateOf(false) }
