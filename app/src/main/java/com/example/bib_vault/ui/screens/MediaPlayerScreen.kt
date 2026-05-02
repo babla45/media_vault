@@ -4,6 +4,8 @@ import android.graphics.BitmapFactory
 import androidx.compose.animation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -15,17 +17,23 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -47,11 +55,62 @@ import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.view.WindowManager
 import android.media.AudioManager
+import android.provider.Settings
+import android.content.Context
+import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 fun android.content.Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
+}
+
+private fun currentWindowBrightnessFraction(activity: Activity?): Float? {
+    val b = activity?.window?.attributes?.screenBrightness ?: return null
+    if (b < 0f || b > 1f) return null
+    return b
+}
+
+private fun readSystemBrightnessFraction(context: android.content.Context): Float =
+    try {
+        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+            .coerceIn(0, 255) / 255f
+    } catch (_: Settings.SettingNotFoundException) {
+        0.5f
+    } catch (_: SecurityException) {
+        0.5f
+    }
+
+private fun applyWindowBrightness(activity: Activity?, level: Float) {
+    val window = activity?.window ?: return
+    val lp = window.attributes
+    lp.screenBrightness = level.coerceIn(0f, 1f)
+    window.attributes = lp
+}
+
+private fun clearWindowBrightnessOverride(activity: Activity?) {
+    val window = activity?.window ?: return
+    val lp = window.attributes
+    lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+    window.attributes = lp
+}
+
+private sealed interface VideoGestureHud {
+    data object Hidden : VideoGestureHud
+    data class BrightnessLevel(val fraction: Float) : VideoGestureHud
+    data class VolumeLevel(val fraction: Float) : VideoGestureHud
+    data class Seeking(val positionMs: Long, val durationMs: Long) : VideoGestureHud
+}
+
+private enum class VideoTouchZone { Left, Center, Right }
+
+private enum class VideoTouchMode {
+    Brightness,
+    Volume,
+    Seek
 }
 
 /**
@@ -207,17 +266,345 @@ private fun EncryptedMediaPlayer(
         // Audio-only UI with playback controls
         AudioPlayerUI(entry = entry, player = exoPlayer)
     } else {
-        // Video player with ExoPlayer's built-in controls
+        VideoPlayerWithGestureControls(exoPlayer = exoPlayer)
+    }
+}
+
+/**
+ * ExoPlayer [PlayerView] with gestures:
+ * - Left third: vertical drag → brightness (HUD with vertical level bar).
+ * - Right third: vertical drag → volume (vertical bar).
+ * - Center band: horizontal drag → seek (full swipe across center ≈ full timeline).
+ */
+@Composable
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+    val audioManager = remember(context) {
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+    val maxMusicVolume = remember(audioManager) {
+        audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+    }
+    val touchSlop = LocalViewConfiguration.current.touchSlop
+    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+    val playerViewHandle = rememberUpdatedState(playerViewRef)
+
+    var screenHeightPx by remember { mutableFloatStateOf(1f) }
+    var centerWidthPx by remember { mutableFloatStateOf(1f) }
+    var hud by remember { mutableStateOf<VideoGestureHud>(VideoGestureHud.Hidden) }
+
+    LaunchedEffect(hud) {
+        if (hud is VideoGestureHud.Hidden) return@LaunchedEffect
+        delay(850)
+        hud = VideoGestureHud.Hidden
+    }
+
+    DisposableEffect(activity) {
+        onDispose {
+            clearWindowBrightnessOverride(activity)
+        }
+    }
+
+    val sideZoneFraction = 0.36f
+    val dragSensitivity = 1.15f
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged {
+                screenHeightPx = it.height.toFloat().coerceAtLeast(1f)
+                val w = it.width.toFloat().coerceAtLeast(1f)
+                centerWidthPx = (w * (1f - 2f * sideZoneFraction)).coerceAtLeast(1f)
+            }
+    ) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = true
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    playerViewRef = this
                 }
+            },
+            update = { pv ->
+                playerViewRef = pv
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Single overlay: drags = brightness / volume / seek; short tap = show PlayerView controller
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(
+                    touchSlop,
+                    screenHeightPx,
+                    centerWidthPx,
+                    sideZoneFraction,
+                    dragSensitivity,
+                    activity,
+                    context,
+                    audioManager,
+                    maxMusicVolume,
+                    exoPlayer
+                ) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        val width = size.width.toFloat().coerceAtLeast(1f)
+                        val leftBound = width * sideZoneFraction
+                        val rightBound = width * (1f - sideZoneFraction)
+
+                        fun zoneAt(x: Float) = when {
+                            x < leftBound -> VideoTouchZone.Left
+                            x > rightBound -> VideoTouchZone.Right
+                            else -> VideoTouchZone.Center
+                        }
+
+                        val startZone = zoneAt(down.position.x)
+                        var totalDx = 0f
+                        var totalDy = 0f
+                        var mode: VideoTouchMode? = null
+                        var dragStartBrightness = 0f
+                        var dragStartVolFraction = 0f
+                        var seekBasePos = 0L
+                        var seekAccumDx = 0f
+
+                        gestureLoop@ while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Main)
+                            val change = event.changes.find { it.id == down.id } ?: break
+                            if (change.changedToUpIgnoreConsumed()) {
+                                if (mode == null) {
+                                    val dist = hypot(totalDx.toDouble(), totalDy.toDouble()).toFloat()
+                                    if (dist < touchSlop) {
+                                        playerViewHandle.value?.showController()
+                                    }
+                                }
+                                break
+                            }
+
+                            val dx = change.positionChange().x
+                            val dy = change.positionChange().y
+                            totalDx += dx
+                            totalDy += dy
+
+                            if (mode == null) {
+                                val dist = hypot(totalDx.toDouble(), totalDy.toDouble()).toFloat()
+                                if (dist >= touchSlop) {
+                                    val ax = abs(totalDx)
+                                    val ay = abs(totalDy)
+                                    mode = when (startZone) {
+                                        VideoTouchZone.Left ->
+                                            if (ay >= ax) VideoTouchMode.Brightness else null
+                                        VideoTouchZone.Right ->
+                                            if (ay >= ax) VideoTouchMode.Volume else null
+                                        VideoTouchZone.Center ->
+                                            if (ax >= ay) VideoTouchMode.Seek else null
+                                    }
+                                    when (mode) {
+                                        VideoTouchMode.Brightness -> {
+                                            dragStartBrightness =
+                                                currentWindowBrightnessFraction(activity)
+                                                    ?: readSystemBrightnessFraction(context)
+                                            hud = VideoGestureHud.BrightnessLevel(dragStartBrightness)
+                                        }
+                                        VideoTouchMode.Volume -> {
+                                            dragStartVolFraction =
+                                                audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                                    .toFloat() / maxMusicVolume
+                                            hud = VideoGestureHud.VolumeLevel(dragStartVolFraction)
+                                        }
+                                        VideoTouchMode.Seek -> {
+                                            seekBasePos = exoPlayer.currentPosition
+                                            seekAccumDx = 0f
+                                            val dur = exoPlayer.duration
+                                            if (dur > 0 && dur != C.TIME_UNSET) {
+                                                hud = VideoGestureHud.Seeking(seekBasePos, dur)
+                                            }
+                                        }
+                                        null -> Unit
+                                    }
+                                }
+                            }
+
+                            when (mode) {
+                                VideoTouchMode.Brightness -> {
+                                    change.consume()
+                                    val act = activity ?: continue@gestureLoop
+                                    val level =
+                                        (dragStartBrightness - totalDy / screenHeightPx * dragSensitivity)
+                                            .coerceIn(0f, 1f)
+                                    applyWindowBrightness(act, level)
+                                    hud = VideoGestureHud.BrightnessLevel(level)
+                                }
+                                VideoTouchMode.Volume -> {
+                                    change.consume()
+                                    val frac =
+                                        (dragStartVolFraction - totalDy / screenHeightPx * dragSensitivity)
+                                            .coerceIn(0f, 1f)
+                                    val idx = (frac * maxMusicVolume).roundToInt()
+                                        .coerceIn(0, maxMusicVolume)
+                                    audioManager.setStreamVolume(
+                                        AudioManager.STREAM_MUSIC,
+                                        idx,
+                                        0
+                                    )
+                                    hud = VideoGestureHud.VolumeLevel(frac)
+                                }
+                                VideoTouchMode.Seek -> {
+                                    change.consume()
+                                    val dur = exoPlayer.duration
+                                    if (dur > 0 && dur != C.TIME_UNSET) {
+                                        seekAccumDx += change.positionChange().x
+                                        val deltaMs = (seekAccumDx / centerWidthPx) * dur.toFloat()
+                                        val newPos =
+                                            (seekBasePos + deltaMs.toLong()).coerceIn(0L, dur)
+                                        exoPlayer.seekTo(newPos)
+                                        hud = VideoGestureHud.Seeking(newPos, dur)
+                                    }
+                                }
+                                null -> Unit
+                            }
+                        }
+                    }
+                }
+        )
+
+        when (val state = hud) {
+            is VideoGestureHud.BrightnessLevel -> {
+                VideoGestureVerticalHudOverlay(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 24.dp),
+                    icon = {
+                        Icon(
+                            Icons.Default.LightMode,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    },
+                    progress = state.fraction,
+                    label = "${(state.fraction * 100f).roundToInt().coerceIn(0, 100)}%"
+                )
+            }
+            is VideoGestureHud.VolumeLevel -> {
+                VideoGestureVerticalHudOverlay(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 24.dp),
+                    icon = {
+                        Icon(
+                            Icons.Default.VolumeUp,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    },
+                    progress = state.fraction,
+                    label = "${(state.fraction * 100f).roundToInt().coerceIn(0, 100)}%"
+                )
+            }
+            is VideoGestureHud.Seeking -> {
+                SeekGestureHudOverlay(
+                    modifier = Modifier.align(Alignment.Center),
+                    positionMs = state.positionMs,
+                    durationMs = state.durationMs
+                )
+            }
+            VideoGestureHud.Hidden -> Unit
+        }
+    }
+}
+
+@Composable
+private fun VideoGestureVerticalHudOverlay(
+    modifier: Modifier = Modifier,
+    icon: @Composable () -> Unit,
+    progress: Float,
+    label: String
+) {
+    val fraction = progress.coerceIn(0f, 1f)
+    Surface(
+        color = Color.Black.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.widthIn(min = 72.dp, max = 96.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            icon()
+            Box(
+                modifier = Modifier
+                    .height(132.dp)
+                    .width(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Color.White.copy(alpha = 0.28f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .fillMaxHeight(fraction)
+                        .background(Color.White)
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun SeekGestureHudOverlay(
+    modifier: Modifier = Modifier,
+    positionMs: Long,
+    durationMs: Long
+) {
+    val frac =
+        if (durationMs > 0) (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+    Surface(
+        color = Color.Black.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.widthIn(min = 200.dp, max = 280.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Schedule,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp)
+                )
+                Text(
+                    text = "${FormatUtils.formatDuration(positionMs)} / ${FormatUtils.formatDuration(durationMs)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White
+                )
+            }
+            LinearProgressIndicator(
+                progress = { frac },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(5.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = Color.White,
+                trackColor = Color.White.copy(alpha = 0.25f)
+            )
+        }
     }
 }
 
