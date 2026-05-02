@@ -137,7 +137,8 @@ private enum class VideoTouchZone { Left, Center, Right }
 
 private enum class VideoTouchMode {
     Brightness,
-    Volume
+    Volume,
+    Seeking
 }
 
 /**
@@ -489,6 +490,9 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                             var mode: VideoTouchMode? = null
                             var dragStartBrightness = 0f
                             var dragStartVolFraction = 0f
+                            var dragStartPositionMs = 0L
+                            var dragStartDurationMs = 0L
+                            var pendingSeekPositionMs = 0L
 
                             gestureLoop@ while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
@@ -505,6 +509,13 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                                                 }
                                             }
                                         }
+                                    } else if (mode == VideoTouchMode.Seeking) {
+                                        change.consume()
+                                        exoPlayer.seekTo(pendingSeekPositionMs)
+                                        hud = VideoGestureHud.Seeking(
+                                            positionMs = pendingSeekPositionMs,
+                                            durationMs = dragStartDurationMs
+                                        )
                                     }
                                     break
                                 }
@@ -524,7 +535,8 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                                                 if (ay >= ax) VideoTouchMode.Brightness else null
                                             VideoTouchZone.Right ->
                                                 if (ay >= ax) VideoTouchMode.Volume else null
-                                            VideoTouchZone.Center -> null
+                                            VideoTouchZone.Center ->
+                                                if (ax >= ay) VideoTouchMode.Seeking else null
                                         }
                                         when (mode) {
                                             VideoTouchMode.Brightness -> {
@@ -538,6 +550,20 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                                                     audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                                                         .toFloat() / maxMusicVolume
                                                 hud = VideoGestureHud.VolumeLevel(dragStartVolFraction)
+                                            }
+                                            VideoTouchMode.Seeking -> {
+                                                val duration = exoPlayer.duration
+                                                if (duration > 0L && duration != C.TIME_UNSET) {
+                                                    dragStartDurationMs = duration
+                                                    dragStartPositionMs = exoPlayer.currentPosition
+                                                    pendingSeekPositionMs = dragStartPositionMs
+                                                    hud = VideoGestureHud.Seeking(
+                                                        positionMs = pendingSeekPositionMs,
+                                                        durationMs = dragStartDurationMs
+                                                    )
+                                                } else {
+                                                    mode = null
+                                                }
                                             }
                                             null -> Unit
                                         }
@@ -567,6 +593,19 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                                             0
                                         )
                                         hud = VideoGestureHud.VolumeLevel(frac)
+                                    }
+                                    VideoTouchMode.Seeking -> {
+                                        change.consume()
+                                        val width = size.width.toFloat().coerceAtLeast(1f)
+                                        val seekDeltaMs =
+                                            (totalDx / width * dragStartDurationMs.toFloat()).toLong()
+                                        pendingSeekPositionMs =
+                                            (dragStartPositionMs + seekDeltaMs)
+                                                .coerceIn(0L, dragStartDurationMs)
+                                        hud = VideoGestureHud.Seeking(
+                                            positionMs = pendingSeekPositionMs,
+                                            durationMs = dragStartDurationMs
+                                        )
                                     }
                                     null -> Unit
                                 }
