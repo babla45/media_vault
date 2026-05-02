@@ -178,6 +178,31 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Remove multiple files from the vault by entry IDs.
+     */
+    fun removeFiles(entryIds: List<String>, password: String) {
+        val currentState = _vaultState.value
+        if (currentState !is VaultState.Unlocked || entryIds.isEmpty()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _vaultState.value = VaultState.Loading("Removing files...")
+                entryIds.forEach { id ->
+                    VaultManager.removeFile(
+                        context = getApplication(),
+                        vaultUri = currentState.vaultUri,
+                        password = password,
+                        entryId = id
+                    )
+                }
+                openVaultInternal(currentState.vaultUri, password)
+            } catch (e: Exception) {
+                _vaultState.value = VaultState.Error("Failed to remove files: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Decrypt an image file entirely in memory for display.
      * Returns null on failure.
      */

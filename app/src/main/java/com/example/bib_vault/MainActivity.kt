@@ -371,8 +371,8 @@ private fun BibVaultApp() {
                                 viewModel.resetAutoLockTimer()
                                 navController.navigate(Routes.mediaPlayer(entry.id))
                             },
-                            onDeleteFile = { entry ->
-                                viewModel.removeFile(entry.id, currentPassword)
+                        onDeleteFiles = { selectedEntries ->
+                            viewModel.removeFiles(selectedEntries.map { it.id }, currentPassword)
                             },
                             onAddFiles = {
                                 try {

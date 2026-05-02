@@ -52,18 +52,20 @@ fun VaultBrowserScreen(
     vaultName: String,
     entries: List<VaultEntry>,
     onFileClick: (VaultEntry) -> Unit,
-    onDeleteFile: (VaultEntry) -> Unit,
+    onDeleteFiles: (List<VaultEntry>) -> Unit,
     onAddFiles: () -> Unit,
     onLoadPreviewBytes: suspend (VaultEntry) -> ByteArray?,
     onLock: () -> Unit
 ) {
     var selectedFilter by rememberSaveable { mutableStateOf(FilterType.ALL) }
-    var showDeleteDialog by remember { mutableStateOf<VaultEntry?>(null) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showListView by rememberSaveable { mutableStateOf(true) }
     var listNamesOnly by rememberSaveable { mutableStateOf(true) }
     var previewsEnabled by rememberSaveable { mutableStateOf(true) }
     val previewCache = remember { mutableStateMapOf<String, Bitmap?>() }
+    val selectedIds = remember { mutableStateListOf<String>() }
+    val isSelectionMode = selectedIds.isNotEmpty()
 
     LaunchedEffect(entries, previewsEnabled) {
         if (!previewsEnabled) {
@@ -128,11 +130,20 @@ fun VaultBrowserScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onAddFiles) {
-                        Icon(Icons.Default.Add, "Add files", tint = VaultPrimaryLight)
-                    }
-                    IconButton(onClick = { showSettingsDialog = true }) {
-                        Icon(Icons.Default.Settings, "Settings", tint = VaultOnSurfaceVariant)
+                    if (isSelectionMode) {
+                        IconButton(onClick = { showDeleteDialog = true }) {
+                            Icon(Icons.Default.Delete, "Delete selected", tint = VaultError)
+                        }
+                        IconButton(onClick = { selectedIds.clear() }) {
+                            Icon(Icons.Default.Close, "Cancel selection", tint = VaultOnSurfaceVariant)
+                        }
+                    } else {
+                        IconButton(onClick = onAddFiles) {
+                            Icon(Icons.Default.Add, "Add files", tint = VaultPrimaryLight)
+                        }
+                        IconButton(onClick = { showSettingsDialog = true }) {
+                            Icon(Icons.Default.Settings, "Settings", tint = VaultOnSurfaceVariant)
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -208,8 +219,19 @@ fun VaultBrowserScreen(
                                 VaultFileNameRow(
                                     index = index + 1,
                                     entry = entry,
-                                    onClick = { onFileClick(entry) },
-                                    onLongClick = { showDeleteDialog = entry }
+                                    isSelected = selectedIds.contains(entry.id),
+                                    onClick = {
+                                        if (isSelectionMode) {
+                                            if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
+                                            else selectedIds.add(entry.id)
+                                        } else {
+                                            onFileClick(entry)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
+                                        else selectedIds.add(entry.id)
+                                    }
                                 )
                             }
                         }
@@ -224,8 +246,19 @@ fun VaultBrowserScreen(
                                     previewsEnabled = previewsEnabled,
                                     previewBitmap = previewCache[entry.id],
                                     useListLayout = true,
-                                    onClick = { onFileClick(entry) },
-                                    onLongClick = { showDeleteDialog = entry }
+                                    isSelected = selectedIds.contains(entry.id),
+                                    onClick = {
+                                        if (isSelectionMode) {
+                                            if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
+                                            else selectedIds.add(entry.id)
+                                        } else {
+                                            onFileClick(entry)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
+                                        else selectedIds.add(entry.id)
+                                    }
                                 )
                             }
                         }
@@ -243,8 +276,19 @@ fun VaultBrowserScreen(
                                 previewsEnabled = previewsEnabled,
                                 previewBitmap = previewCache[entry.id],
                                 useListLayout = false,
-                                onClick = { onFileClick(entry) },
-                                onLongClick = { showDeleteDialog = entry }
+                                isSelected = selectedIds.contains(entry.id),
+                                onClick = {
+                                    if (isSelectionMode) {
+                                        if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
+                                        else selectedIds.add(entry.id)
+                                    } else {
+                                        onFileClick(entry)
+                                    }
+                                },
+                                onLongClick = {
+                                    if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
+                                    else selectedIds.add(entry.id)
+                                }
                             )
                         }
                     }
@@ -323,21 +367,23 @@ fun VaultBrowserScreen(
     }
 
     // Delete confirmation dialog
-    showDeleteDialog?.let { entry ->
+    if (showDeleteDialog && selectedIds.isNotEmpty()) {
+        val selectedEntries = entries.filter { selectedIds.contains(it.id) }
         AlertDialog(
-            onDismissRequest = { showDeleteDialog = null },
+            onDismissRequest = { showDeleteDialog = false },
             shape = RoundedCornerShape(20.dp),
             containerColor = VaultSurface,
             icon = { Icon(Icons.Default.Delete, null, tint = VaultError) },
-            title = { Text("Remove File") },
+            title = { Text("Remove ${selectedEntries.size} file(s)") },
             text = {
-                Text("Remove \"${entry.fileName}\" from the vault? This cannot be undone.")
+                Text("Remove ${selectedEntries.size} selected file(s) from the vault? This cannot be undone.")
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        onDeleteFile(entry)
-                        showDeleteDialog = null
+                        onDeleteFiles(selectedEntries)
+                        selectedIds.clear()
+                        showDeleteDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = VaultError)
                 ) {
@@ -345,7 +391,7 @@ fun VaultBrowserScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = null }) {
+                TextButton(onClick = { showDeleteDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -360,6 +406,7 @@ private fun VaultFileCard(
     previewsEnabled: Boolean,
     previewBitmap: Bitmap?,
     useListLayout: Boolean,
+    isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -386,7 +433,7 @@ private fun VaultFileCard(
                 onLongClick = onLongClick
             ),
         shape = RoundedCornerShape(16.dp),
-        color = VaultSurface
+        color = if (isSelected) VaultPrimary.copy(alpha = 0.22f) else VaultSurface
     ) {
         Column {
             // Media type visual area
@@ -518,6 +565,7 @@ private enum class FilterType { ALL, VIDEO, AUDIO, IMAGE }
 private fun VaultFileNameRow(
     index: Int,
     entry: VaultEntry,
+    isSelected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -528,7 +576,7 @@ private fun VaultFileNameRow(
             .clip(RoundedCornerShape(8.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = RoundedCornerShape(8.dp),
-        color = VaultSurface
+        color = if (isSelected) VaultPrimary.copy(alpha = 0.22f) else VaultSurface
     ) {
         Box(
             modifier = Modifier
