@@ -168,9 +168,15 @@ fun MediaPlayerScreen(
     val imageEntries = remember(sortedEntries) {
         sortedEntries.filter { MimeUtils.getMediaType(it.mimeType) == MediaType.IMAGE }
     }
-    var currentImageId by remember(entry.id) { mutableStateOf(entry.id) }
-    val currentEntry = remember(entry, entries, currentImageId) {
-        entries[currentImageId] ?: entry
+    val videoEntries = remember(sortedEntries) {
+        sortedEntries.filter {
+            val type = MimeUtils.getMediaType(it.mimeType)
+            type == MediaType.VIDEO
+        }
+    }
+    var currentEntryId by remember(entry.id) { mutableStateOf(entry.id) }
+    val currentEntry = remember(entry, entries, currentEntryId) {
+        entries[currentEntryId] ?: entry
     }
 
     val mediaType = MimeUtils.getMediaType(currentEntry.mimeType)
@@ -182,6 +188,13 @@ fun MediaPlayerScreen(
     }
     val canSwipePrev = currentImageIndex > 0
     val canSwipeNext = currentImageIndex >= 0 && currentImageIndex < imageEntries.lastIndex
+    val currentMediaIndex = if (mediaType == MediaType.VIDEO) {
+        videoEntries.indexOfFirst { it.id == currentEntry.id }
+    } else {
+        -1
+    }
+    val canPrevMedia = currentMediaIndex > 0
+    val canNextMedia = currentMediaIndex >= 0 && currentMediaIndex < videoEntries.lastIndex
     val isImage = mediaType == MediaType.IMAGE
     var imageChromeVisible by rememberSaveable { mutableStateOf(true) }
 
@@ -251,7 +264,19 @@ fun MediaPlayerScreen(
                         header = header,
                         key = key,
                         entries = entries,
-                        isAudioOnly = mediaType == MediaType.AUDIO
+                        isAudioOnly = mediaType == MediaType.AUDIO,
+                        canPrevMedia = canPrevMedia,
+                        canNextMedia = canNextMedia,
+                        onPrevMedia = {
+                            if (canPrevMedia) {
+                                currentEntryId = videoEntries[currentMediaIndex - 1].id
+                            }
+                        },
+                        onNextMedia = {
+                            if (canNextMedia) {
+                                currentEntryId = videoEntries[currentMediaIndex + 1].id
+                            }
+                        }
                     )
                 }
                 MediaType.IMAGE -> {
@@ -266,12 +291,12 @@ fun MediaPlayerScreen(
                         canSwipeNext = canSwipeNext,
                         onSwipePrev = {
                             if (canSwipePrev) {
-                                currentImageId = imageEntries[currentImageIndex - 1].id
+                                currentEntryId = imageEntries[currentImageIndex - 1].id
                             }
                         },
                         onSwipeNext = {
                             if (canSwipeNext) {
-                                currentImageId = imageEntries[currentImageIndex + 1].id
+                                currentEntryId = imageEntries[currentImageIndex + 1].id
                             }
                         }
                     )
@@ -299,7 +324,11 @@ private fun EncryptedMediaPlayer(
     header: VaultHeader,
     key: SecretKey,
     entries: Map<String, VaultEntry>,
-    isAudioOnly: Boolean
+    isAudioOnly: Boolean,
+    canPrevMedia: Boolean,
+    canNextMedia: Boolean,
+    onPrevMedia: () -> Unit,
+    onNextMedia: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -308,18 +337,9 @@ private fun EncryptedMediaPlayer(
         EncryptedDataSourceFactory(context, vaultUri, key, entries, header)
     }
 
-    // Create ExoPlayer instance
+    // Keep one player instance; swap source when entry changes.
     val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            // Build media source from encrypted data source
-            val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
-                .createMediaSource(
-                    MediaItem.fromUri(Uri.parse("bibvault://entry/${entry.id}"))
-                )
-            setMediaSource(mediaSource)
-            prepare()
-            playWhenReady = true
-        }
+        ExoPlayer.Builder(context).build()
     }
 
     DisposableEffect(Unit) {
@@ -328,11 +348,28 @@ private fun EncryptedMediaPlayer(
         }
     }
 
+    LaunchedEffect(entry.id, dataSourceFactory) {
+        val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+            .createMediaSource(
+                MediaItem.fromUri(Uri.parse("bibvault://entry/${entry.id}"))
+            )
+        exoPlayer.stop()
+        exoPlayer.setMediaSource(mediaSource, true)
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = true
+    }
+
     if (isAudioOnly) {
         // Audio-only UI with playback controls
         AudioPlayerUI(entry = entry, player = exoPlayer)
     } else {
-        VideoPlayerWithGestureControls(exoPlayer = exoPlayer)
+        VideoPlayerWithGestureControls(
+            exoPlayer = exoPlayer,
+            canPrevMedia = canPrevMedia,
+            canNextMedia = canNextMedia,
+            onPrevMedia = onPrevMedia,
+            onNextMedia = onNextMedia
+        )
     }
 }
 
@@ -344,7 +381,13 @@ private fun EncryptedMediaPlayer(
  */
 @Composable
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
+private fun VideoPlayerWithGestureControls(
+    exoPlayer: ExoPlayer,
+    canPrevMedia: Boolean,
+    canNextMedia: Boolean,
+    onPrevMedia: () -> Unit,
+    onNextMedia: () -> Unit
+) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val audioManager = remember(context) {
@@ -412,9 +455,19 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                 exoPlayer.seekTo(newPos)
             }
         }
+        pv.findViewById<View>(Media3UiR.id.exo_prev)?.setOnClickListener {
+            if (canPrevMedia) onPrevMedia()
+        }
+        pv.findViewById<View>(Media3UiR.id.exo_next)?.setOnClickListener {
+            if (canNextMedia) onNextMedia()
+        }
+        pv.findViewById<View>(Media3UiR.id.exo_prev)?.isEnabled = canPrevMedia
+        pv.findViewById<View>(Media3UiR.id.exo_prev)?.alpha = if (canPrevMedia) 1f else 0.45f
+        pv.findViewById<View>(Media3UiR.id.exo_next)?.isEnabled = canNextMedia
+        pv.findViewById<View>(Media3UiR.id.exo_next)?.alpha = if (canNextMedia) 1f else 0.45f
     }
 
-    LaunchedEffect(playerViewRef, seekButtonStepSec, isControllerVisible) {
+    LaunchedEffect(playerViewRef, seekButtonStepSec, isControllerVisible, canPrevMedia, canNextMedia) {
         // Controller subviews can be recreated when shown/hidden; re-bind on each change.
         bindSeekButtons(seekButtonStepSec)
     }

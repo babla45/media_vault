@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,6 +20,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -86,6 +89,15 @@ private fun queryFileInfo(context: Context, uri: Uri): Pair<String, Long> {
     return Pair(name, size)
 }
 
+private fun clearAppCaches(context: Context) {
+    try {
+        context.cacheDir?.deleteRecursively()
+    } catch (_: Exception) {}
+    try {
+        context.externalCacheDir?.deleteRecursively()
+    } catch (_: Exception) {}
+}
+
 @Composable
 private fun BibVaultApp() {
     val context = LocalContext.current
@@ -117,6 +129,7 @@ private fun BibVaultApp() {
     // ── Dialog state ──
     var showOpenPasswordDialog by remember { mutableStateOf(false) }
     var showCreatePasswordDialog by remember { mutableStateOf(false) }
+    var showExitVaultDialog by remember { mutableStateOf(false) }
     var pendingVaultUri by remember { mutableStateOf<Uri?>(null) }
     var currentPassword by remember { mutableStateOf("") }
     var intentProcessed by rememberSaveable { mutableStateOf(false) }
@@ -372,6 +385,9 @@ private fun BibVaultApp() {
                 val state = vaultState
                 when (state) {
                     is VaultState.Unlocked -> {
+                        BackHandler {
+                            showExitVaultDialog = true
+                        }
                         VaultBrowserScreen(
                             vaultName = state.vaultName,
                             entries = state.entries,
@@ -512,6 +528,34 @@ private fun BibVaultApp() {
             onDismiss = {
                 showCreatePasswordDialog = false
                 if (vaultState is VaultState.Error) viewModel.clearError()
+            }
+        )
+    }
+
+    if (showExitVaultDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitVaultDialog = false },
+            title = { Text("Exit vault?") },
+            text = { Text("This will lock the vault, clear cache, and close the app.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showExitVaultDialog = false
+                        previewCache.clear()
+                        previewCacheVaultUri = null
+                        clearAppCaches(context)
+                        currentPassword = ""
+                        viewModel.lock()
+                        activity?.finish()
+                    }
+                ) {
+                    Text("Yes")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitVaultDialog = false }) {
+                    Text("No")
+                }
             }
         )
     }
