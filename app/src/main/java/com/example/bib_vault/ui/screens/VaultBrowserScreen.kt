@@ -11,14 +11,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as lazyItems
+import androidx.compose.foundation.lazy.itemsIndexed as lazyItemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +60,9 @@ fun VaultBrowserScreen(
 ) {
     var selectedFilter by remember { mutableStateOf(FilterType.ALL) }
     var showDeleteDialog by remember { mutableStateOf<VaultEntry?>(null) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+    var showListView by rememberSaveable { mutableStateOf(false) }
+    var listNamesOnly by rememberSaveable { mutableStateOf(false) }
     val previewCache = remember { mutableStateMapOf<String, Bitmap?>() }
 
     LaunchedEffect(entries, previewsEnabled) {
@@ -124,8 +131,8 @@ fun VaultBrowserScreen(
                     IconButton(onClick = onAddFiles) {
                         Icon(Icons.Default.Add, "Add files", tint = VaultPrimaryLight)
                     }
-                    IconButton(onClick = onLock) {
-                        Icon(Icons.Default.LockOpen, "Lock vault", tint = VaultError)
+                    IconButton(onClick = { showSettingsDialog = true }) {
+                        Icon(Icons.Default.Settings, "Settings", tint = VaultOnSurfaceVariant)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -191,24 +198,117 @@ fun VaultBrowserScreen(
                 }
             } else {
                 // File grid
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(filteredEntries, key = { it.id }) { entry ->
-                        VaultFileCard(
-                            entry = entry,
-                            previewsEnabled = previewsEnabled,
-                            previewBitmap = previewCache[entry.id],
-                            onClick = { onFileClick(entry) },
-                            onLongClick = { showDeleteDialog = entry }
-                        )
+                if (showListView) {
+                    if (listNamesOnly) {
+                        LazyColumn(
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            lazyItemsIndexed(filteredEntries, key = { _, it -> it.id }) { index, entry ->
+                                VaultFileNameRow(
+                                    index = index + 1,
+                                    entry = entry,
+                                    onClick = { onFileClick(entry) },
+                                    onLongClick = { showDeleteDialog = entry }
+                                )
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            lazyItems(filteredEntries, key = { it.id }) { entry ->
+                                VaultFileCard(
+                                    entry = entry,
+                                    previewsEnabled = previewsEnabled,
+                                    previewBitmap = previewCache[entry.id],
+                                    useListLayout = true,
+                                    onClick = { onFileClick(entry) },
+                                    onLongClick = { showDeleteDialog = entry }
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        contentPadding = PaddingValues(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        gridItems(filteredEntries, key = { it.id }) { entry ->
+                            VaultFileCard(
+                                entry = entry,
+                                previewsEnabled = previewsEnabled,
+                                previewBitmap = previewCache[entry.id],
+                                useListLayout = false,
+                                onClick = { onFileClick(entry) },
+                                onLongClick = { showDeleteDialog = entry }
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    if (showSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = VaultSurface,
+            title = { Text("Vault Settings") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("List view")
+                        Switch(
+                            checked = showListView,
+                            onCheckedChange = { showListView = it }
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("List: names only (no preview)")
+                        Switch(
+                            checked = listNamesOnly,
+                            enabled = showListView,
+                            onCheckedChange = { listNamesOnly = it }
+                        )
+                    }
+                    Text(
+                        text = if (showListView) "Showing files in list" else "Showing files in grid (2 per row)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = VaultOnSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedButton(
+                        onClick = {
+                            showSettingsDialog = false
+                            onLock()
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = VaultError)
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Lock Vault")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSettingsDialog = false }) {
+                    Text("Done")
+                }
+            }
+        )
     }
 
     // Delete confirmation dialog
@@ -248,6 +348,7 @@ private fun VaultFileCard(
     entry: VaultEntry,
     previewsEnabled: Boolean,
     previewBitmap: Bitmap?,
+    useListLayout: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -267,7 +368,7 @@ private fun VaultFileCard(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(0.85f)
+            .aspectRatio(if (useListLayout) 2.1f else 0.85f)
             .clip(RoundedCornerShape(16.dp))
             .combinedClickable(
                 onClick = onClick,
@@ -400,6 +501,40 @@ private fun FilterTab(
 }
 
 private enum class FilterType { ALL, VIDEO, AUDIO, IMAGE }
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VaultFileNameRow(
+    index: Int,
+    entry: VaultEntry,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(34.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        shape = RoundedCornerShape(8.dp),
+        color = VaultSurface
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Text(
+                text = "$index. ${entry.fileName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = VaultOnSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
 
 private class ByteArrayMediaDataSource(
     private val data: ByteArray
