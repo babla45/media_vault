@@ -11,11 +11,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -106,9 +112,7 @@ private fun BibVaultApp() {
     // ── Dialog state ──
     var showOpenPasswordDialog by remember { mutableStateOf(false) }
     var showCreatePasswordDialog by remember { mutableStateOf(false) }
-    var showAddPasswordDialog by remember { mutableStateOf(false) }
     var pendingVaultUri by remember { mutableStateOf<Uri?>(null) }
-    var pendingAddFileUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var currentPassword by remember { mutableStateOf("") }
     var intentProcessed by rememberSaveable { mutableStateOf(false) }
 
@@ -263,8 +267,9 @@ private fun BibVaultApp() {
                     } catch (e: SecurityException) {}
                 }
             }
-            pendingAddFileUris = uris
-            showAddPasswordDialog = true
+            if (currentPassword.isNotBlank()) {
+                viewModel.addFiles(uris, currentPassword)
+            }
         }
     }
 
@@ -273,8 +278,9 @@ private fun BibVaultApp() {
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris ->
         if (uris.isNotEmpty()) {
-            pendingAddFileUris = uris
-            showAddPasswordDialog = true
+            if (currentPassword.isNotBlank()) {
+                viewModel.addFiles(uris, currentPassword)
+            }
         }
     }
 
@@ -356,32 +362,47 @@ private fun BibVaultApp() {
 
             composable(Routes.VAULT_BROWSER) {
                 val state = vaultState
-                if (state is VaultState.Unlocked) {
-                    VaultBrowserScreen(
-                        vaultName = state.vaultName,
-                        entries = state.entries,
-                        onFileClick = { entry ->
-                            viewModel.resetAutoLockTimer()
-                            navController.navigate(Routes.mediaPlayer(entry.id))
-                        },
-                        onDeleteFile = { entry ->
-                            viewModel.removeFile(entry.id, currentPassword)
-                        },
-                        onAddFiles = {
-                            try {
-                                addFilePicker.launch(arrayOf("video/*", "audio/*", "image/*"))
-                            } catch (e: android.content.ActivityNotFoundException) {
-                                fallbackAddFilePicker.launch("*/*")
+                when (state) {
+                    is VaultState.Unlocked -> {
+                        VaultBrowserScreen(
+                            vaultName = state.vaultName,
+                            entries = state.entries,
+                            onFileClick = { entry ->
+                                viewModel.resetAutoLockTimer()
+                                navController.navigate(Routes.mediaPlayer(entry.id))
+                            },
+                            onDeleteFile = { entry ->
+                                viewModel.removeFile(entry.id, currentPassword)
+                            },
+                            onAddFiles = {
+                                try {
+                                    addFilePicker.launch(arrayOf("video/*", "audio/*", "image/*"))
+                                } catch (e: android.content.ActivityNotFoundException) {
+                                    fallbackAddFilePicker.launch("*/*")
+                                }
+                            },
+                            onLoadPreviewBytes = { entry ->
+                                viewModel.decryptImageBytes(entry)
+                            },
+                            onLock = {
+                                currentPassword = ""
+                                viewModel.lock()
                             }
-                        },
-                        onLoadPreviewBytes = { entry ->
-                            viewModel.decryptImageBytes(entry)
-                        },
-                        onLock = {
-                            currentPassword = ""
-                            viewModel.lock()
+                        )
+                    }
+                    is VaultState.Loading -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator()
+                            Text(
+                                text = state.message,
+                                modifier = Modifier.align(Alignment.Center).padding(top = 56.dp)
+                            )
                         }
-                    )
+                    }
+                    else -> Unit
                 }
             }
 
@@ -451,32 +472,11 @@ private fun BibVaultApp() {
         )
     }
 
-    // Add files password dialog
-    if (showAddPasswordDialog) {
-        PasswordDialog(
-            isCreateMode = false,
-            errorMessage = if (vaultState is VaultState.Error) (vaultState as VaultState.Error).message else null,
-            isLoading = vaultState is VaultState.Loading,
-            onConfirm = { password ->
-                currentPassword = password
-                viewModel.addFiles(pendingAddFileUris, password)
-                showAddPasswordDialog = false
-                pendingAddFileUris = emptyList()
-            },
-            onDismiss = {
-                showAddPasswordDialog = false
-                pendingAddFileUris = emptyList()
-                if (vaultState is VaultState.Error) viewModel.clearError()
-            }
-        )
-    }
-
     // Dismiss password dialog on successful unlock
     LaunchedEffect(vaultState) {
         if (vaultState is VaultState.Unlocked) {
             showOpenPasswordDialog = false
             showCreatePasswordDialog = false
-            showAddPasswordDialog = false
         }
     }
 }
