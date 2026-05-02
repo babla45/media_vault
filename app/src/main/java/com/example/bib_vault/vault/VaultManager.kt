@@ -107,80 +107,62 @@ object VaultManager {
         // Phase 1: Encrypt all files into memory-buffered chunks
         // and build the entry index simultaneously
         val entries = mutableListOf<VaultEntry>()
-        val allEncryptedData = ByteArrayOutputStream()
         var currentOffset = 0L
+        val encryptedDataTempFile = java.io.File.createTempFile("bib_vault_create_", ".tmp", context.cacheDir)
+        try {
+            FileOutputStream(encryptedDataTempFile).use { encryptedDataOut ->
+                for ((index, fileUri) in fileUris.withIndex()) {
+                    onProgress?.invoke(index + 1, fileUris.size)
 
-        for ((index, fileUri) in fileUris.withIndex()) {
-            onProgress?.invoke(index + 1, fileUris.size)
+                    val fileName = getFileName(context, fileUri)
+                    val mimeType = context.contentResolver.getType(fileUri) ?: MimeUtils.guessMimeType(fileName)
+                    val baseIv = CryptoManager.generateCtrBaseIv()
+                    val mac = Mac.getInstance("HmacSHA256").apply { init(key) }
 
-            val fileName = getFileName(context, fileUri)
-            val mimeType = context.contentResolver.getType(fileUri) ?: MimeUtils.guessMimeType(fileName)
-            val baseIv = CryptoManager.generateCtrBaseIv()
+                    var originalSize = 0L
+                    var chunkIndex = 0L
+                    openInputStreamCompat(context, fileUri).use { stream ->
+                        val buffer = ByteArray(CryptoConstants.CHUNK_SIZE)
+                        while (true) {
+                            val bytesRead = stream.read(buffer)
+                            if (bytesRead <= 0) break
 
-            // Read and encrypt the file chunk by chunk
-            var inputStream: java.io.InputStream? = null
-            try {
-                inputStream = context.contentResolver.openInputStream(fileUri)
-            } catch (e: Exception) {
-                val path = getFilePathFromUri(context, fileUri)
-                if (path != null) {
-                    inputStream = java.io.FileInputStream(java.io.File(path))
-                } else {
-                    throw IllegalStateException("Cannot open file via ContentResolver and could not resolve path: $fileUri", e)
-                }
-            }
-            if (inputStream == null) {
-                val path = getFilePathFromUri(context, fileUri)
-                if (path != null) inputStream = java.io.FileInputStream(java.io.File(path))
-                else throw IllegalStateException("Cannot open file: $fileUri")
-            }
+                            val plaintext = if (bytesRead < buffer.size) {
+                                buffer.copyOf(bytesRead)
+                            } else {
+                                buffer
+                            }
 
-            var originalSize = 0L
-            var chunkIndex = 0L
-            val hmacAccumulator = ByteArrayOutputStream()
+                            val encrypted = CryptoManager.encryptChunk(key, baseIv, chunkIndex, plaintext)
+                            encryptedDataOut.write(encrypted)
+                            mac.update(encrypted)
 
-            inputStream.use { stream ->
-                val buffer = ByteArray(CryptoConstants.CHUNK_SIZE)
-                while (true) {
-                    val bytesRead = stream.read(buffer)
-                    if (bytesRead <= 0) break
-
-                    val plaintext = if (bytesRead < buffer.size) {
-                        buffer.copyOf(bytesRead)
-                    } else {
-                        buffer
+                            originalSize += bytesRead
+                            chunkIndex++
+                        }
                     }
 
-                    val encrypted = CryptoManager.encryptChunk(key, baseIv, chunkIndex, plaintext)
-                    allEncryptedData.write(encrypted)
-                    hmacAccumulator.write(encrypted)
+                    val encryptedSize = originalSize // CTR mode: ciphertext size == plaintext size
+                    val hmac = mac.doFinal()
+                    entries.add(
+                        VaultEntry(
+                            id = UUID.randomUUID().toString(),
+                            fileName = fileName,
+                            mimeType = mimeType,
+                            originalSize = originalSize,
+                            offset = currentOffset,
+                            encryptedSize = encryptedSize,
+                            chunkSize = CryptoConstants.CHUNK_SIZE,
+                            chunkCount = chunkIndex.toInt(),
+                            baseIvHex = CryptoManager.bytesToHex(baseIv),
+                            hmacHex = CryptoManager.bytesToHex(hmac),
+                            addedTimestamp = System.currentTimeMillis()
+                        )
+                    )
 
-                    originalSize += bytesRead
-                    chunkIndex++
+                    currentOffset += encryptedSize
                 }
             }
-
-            val encryptedSize = originalSize // CTR mode: ciphertext size == plaintext size
-            val hmac = CryptoManager.computeHmac(key, hmacAccumulator.toByteArray())
-
-            entries.add(
-                VaultEntry(
-                    id = UUID.randomUUID().toString(),
-                    fileName = fileName,
-                    mimeType = mimeType,
-                    originalSize = originalSize,
-                    offset = currentOffset,
-                    encryptedSize = encryptedSize,
-                    chunkSize = CryptoConstants.CHUNK_SIZE,
-                    chunkCount = chunkIndex.toInt(),
-                    baseIvHex = CryptoManager.bytesToHex(baseIv),
-                    hmacHex = CryptoManager.bytesToHex(hmac),
-                    addedTimestamp = System.currentTimeMillis()
-                )
-            )
-
-            currentOffset += encryptedSize
-        }
 
         // Phase 2: Encrypt the index
         val indexJson = entriesToJson(entries)
@@ -209,24 +191,26 @@ object VaultManager {
             else throw IllegalStateException("Cannot write to vault: $vaultUri")
         }
 
-        outputStream.use { stream ->
-            DataOutputStream(stream).use { dos ->
-                // Header
-                dos.write(CryptoConstants.MAGIC_BYTES)                         // 8 bytes
-                dos.writeInt(CryptoConstants.FORMAT_VERSION_CURRENT)            // 4 bytes
-                dos.write(salt)                                                 // 32 bytes
-                dos.write(indexIv)                                              // 12 bytes
-                dos.writeInt(encryptedIndex.size)                               // 4 bytes (v1: exact, v2: reserved)
-                // = 60 bytes total header
+            outputStream.use { stream ->
+                DataOutputStream(stream).use { dos ->
+                    // Header
+                    dos.write(CryptoConstants.MAGIC_BYTES)                         // 8 bytes
+                    dos.writeInt(CryptoConstants.FORMAT_VERSION_CURRENT)            // 4 bytes
+                    dos.write(salt)                                                 // 32 bytes
+                    dos.write(indexIv)                                              // 12 bytes
+                    dos.writeInt(encryptedIndex.size)                               // 4 bytes (v1: exact, v2: reserved)
+                    // = 60 bytes total header
 
-                // Encrypted index
-                dos.write(encryptedIndex)
+                    // Encrypted index
+                    dos.write(encryptedIndex)
 
-                // File data blocks
-                dos.write(allEncryptedData.toByteArray())
-
-                dos.flush()
+                    // File data blocks (streamed from temp file to avoid OOM)
+                    FileInputStream(encryptedDataTempFile).use { it.copyTo(dos) }
+                    dos.flush()
+                }
             }
+        } finally {
+            encryptedDataTempFile.delete()
         }
     }
 
@@ -380,6 +364,9 @@ object VaultManager {
         entry: VaultEntry,
         key: SecretKey
     ): ByteArray {
+        require(entry.originalSize <= Int.MAX_VALUE.toLong()) {
+            "File too large to load fully in memory: ${entry.fileName}"
+        }
         val output = ByteArrayOutputStream(entry.originalSize.toInt())
 
         for (i in 0 until entry.chunkCount) {
@@ -621,115 +608,110 @@ object VaultManager {
         val (header, _) = openVault(context, vaultUri, password)
         val key = CryptoManager.deriveKey(password, header.salt)
 
-        val existingData = mutableListOf<ByteArray>()
-        for (entry in existingEntries) {
-            existingData.add(readFileBytes(context, vaultUri, header, entry, key))
-        }
-
         val salt = CryptoManager.generateSalt()
         val newKey = CryptoManager.deriveKey(password, salt)
 
         val entries = mutableListOf<VaultEntry>()
-        val allEncryptedData = ByteArrayOutputStream()
         var currentOffset = 0L
         val totalFiles = existingEntries.size + newFileUris.size
         var fileCounter = 0
+        val encryptedDataTempFile = java.io.File.createTempFile("bib_vault_v1_add_", ".tmp", context.cacheDir)
+        try {
+            FileOutputStream(encryptedDataTempFile).use { encryptedDataOut ->
+                for (existingEntry in existingEntries) {
+                    fileCounter++
+                    onProgress?.invoke(fileCounter, totalFiles)
 
-        for ((idx, existingEntry) in existingEntries.withIndex()) {
-            fileCounter++
-            onProgress?.invoke(fileCounter, totalFiles)
+                    val baseIv = CryptoManager.generateCtrBaseIv()
+                    val mac = Mac.getInstance("HmacSHA256").apply { init(newKey) }
+                    var chunkIndex = 0L
 
-            val baseIv = CryptoManager.generateCtrBaseIv()
-            val plainData = existingData[idx]
-            val hmacAccumulator = ByteArrayOutputStream()
-            var chunkIndex = 0L
-            var bytesProcessed = 0
+                    while (chunkIndex < existingEntry.chunkCount) {
+                        val chunk = readChunk(context, vaultUri, header, existingEntry, chunkIndex, key)
+                        val encrypted = CryptoManager.encryptChunk(newKey, baseIv, chunkIndex, chunk)
+                        encryptedDataOut.write(encrypted)
+                        mac.update(encrypted)
+                        chunkIndex++
+                    }
 
-            while (bytesProcessed < plainData.size) {
-                val end = minOf(bytesProcessed + CryptoConstants.CHUNK_SIZE, plainData.size)
-                val chunk = plainData.copyOfRange(bytesProcessed, end)
-                val encrypted = CryptoManager.encryptChunk(newKey, baseIv, chunkIndex, chunk)
-                allEncryptedData.write(encrypted)
-                hmacAccumulator.write(encrypted)
-                bytesProcessed = end
-                chunkIndex++
-            }
+                    val hmac = mac.doFinal()
+                    entries.add(
+                        existingEntry.copy(
+                            offset = currentOffset,
+                            baseIvHex = CryptoManager.bytesToHex(baseIv),
+                            hmacHex = CryptoManager.bytesToHex(hmac),
+                            chunkCount = chunkIndex.toInt()
+                        )
+                    )
+                    currentOffset += existingEntry.encryptedSize
+                }
 
-            val hmac = CryptoManager.computeHmac(newKey, hmacAccumulator.toByteArray())
-            entries.add(
-                existingEntry.copy(
-                    offset = currentOffset,
-                    baseIvHex = CryptoManager.bytesToHex(baseIv),
-                    hmacHex = CryptoManager.bytesToHex(hmac),
-                    chunkCount = chunkIndex.toInt()
-                )
-            )
-            currentOffset += existingEntry.encryptedSize
-        }
+                for (fileUri in newFileUris) {
+                    fileCounter++
+                    onProgress?.invoke(fileCounter, totalFiles)
 
-        for (fileUri in newFileUris) {
-            fileCounter++
-            onProgress?.invoke(fileCounter, totalFiles)
+                    val fileName = getFileName(context, fileUri)
+                    val mimeType = context.contentResolver.getType(fileUri) ?: MimeUtils.guessMimeType(fileName)
+                    val baseIv = CryptoManager.generateCtrBaseIv()
+                    val mac = Mac.getInstance("HmacSHA256").apply { init(newKey) }
 
-            val fileName = getFileName(context, fileUri)
-            val mimeType = context.contentResolver.getType(fileUri) ?: MimeUtils.guessMimeType(fileName)
-            val baseIv = CryptoManager.generateCtrBaseIv()
+                    var originalSize = 0L
+                    var chunkIndex = 0L
+                    openInputStreamCompat(context, fileUri).use { stream ->
+                        val buffer = ByteArray(CryptoConstants.CHUNK_SIZE)
+                        while (true) {
+                            val bytesRead = stream.read(buffer)
+                            if (bytesRead <= 0) break
+                            val plaintext = if (bytesRead < buffer.size) buffer.copyOf(bytesRead) else buffer
+                            val encrypted = CryptoManager.encryptChunk(newKey, baseIv, chunkIndex, plaintext)
+                            encryptedDataOut.write(encrypted)
+                            mac.update(encrypted)
+                            originalSize += bytesRead
+                            chunkIndex++
+                        }
+                    }
 
-            var originalSize = 0L
-            var chunkIndex = 0L
-            val hmacAccumulator = ByteArrayOutputStream()
-
-            openInputStreamCompat(context, fileUri).use { stream ->
-                val buffer = ByteArray(CryptoConstants.CHUNK_SIZE)
-                while (true) {
-                    val bytesRead = stream.read(buffer)
-                    if (bytesRead <= 0) break
-                    val plaintext = if (bytesRead < buffer.size) buffer.copyOf(bytesRead) else buffer
-                    val encrypted = CryptoManager.encryptChunk(newKey, baseIv, chunkIndex, plaintext)
-                    allEncryptedData.write(encrypted)
-                    hmacAccumulator.write(encrypted)
-                    originalSize += bytesRead
-                    chunkIndex++
+                    val hmac = mac.doFinal()
+                    entries.add(
+                        VaultEntry(
+                            id = UUID.randomUUID().toString(),
+                            fileName = fileName,
+                            mimeType = mimeType,
+                            originalSize = originalSize,
+                            offset = currentOffset,
+                            encryptedSize = originalSize,
+                            chunkSize = CryptoConstants.CHUNK_SIZE,
+                            chunkCount = chunkIndex.toInt(),
+                            baseIvHex = CryptoManager.bytesToHex(baseIv),
+                            hmacHex = CryptoManager.bytesToHex(hmac),
+                            addedTimestamp = System.currentTimeMillis()
+                        )
+                    )
+                    currentOffset += originalSize
                 }
             }
 
-            val hmac = CryptoManager.computeHmac(newKey, hmacAccumulator.toByteArray())
-            entries.add(
-                VaultEntry(
-                    id = UUID.randomUUID().toString(),
-                    fileName = fileName,
-                    mimeType = mimeType,
-                    originalSize = originalSize,
-                    offset = currentOffset,
-                    encryptedSize = originalSize,
-                    chunkSize = CryptoConstants.CHUNK_SIZE,
-                    chunkCount = chunkIndex.toInt(),
-                    baseIvHex = CryptoManager.bytesToHex(baseIv),
-                    hmacHex = CryptoManager.bytesToHex(hmac),
-                    addedTimestamp = System.currentTimeMillis()
-                )
-            )
-            currentOffset += originalSize
-        }
+            val indexJson = entriesToJson(entries)
+            val indexIv = CryptoManager.generateGcmIv()
+            val encryptedIndex = CryptoManager.encryptIndex(newKey, indexIv, indexJson.toByteArray(Charsets.UTF_8))
 
-        val indexJson = entriesToJson(entries)
-        val indexIv = CryptoManager.generateGcmIv()
-        val encryptedIndex = CryptoManager.encryptIndex(newKey, indexIv, indexJson.toByteArray(Charsets.UTF_8))
+            val outputStream = context.contentResolver.openOutputStream(vaultUri, "wt")
+                ?: throw IllegalStateException("Cannot write to vault: $vaultUri")
 
-        val outputStream = context.contentResolver.openOutputStream(vaultUri, "wt")
-            ?: throw IllegalStateException("Cannot write to vault: $vaultUri")
-
-        outputStream.use { stream ->
-            DataOutputStream(stream).use { dos ->
-                dos.write(CryptoConstants.MAGIC_BYTES)
-                dos.writeInt(CryptoConstants.FORMAT_VERSION_V1)
-                dos.write(salt)
-                dos.write(indexIv)
-                dos.writeInt(encryptedIndex.size)
-                dos.write(encryptedIndex)
-                dos.write(allEncryptedData.toByteArray())
-                dos.flush()
+            outputStream.use { stream ->
+                DataOutputStream(stream).use { dos ->
+                    dos.write(CryptoConstants.MAGIC_BYTES)
+                    dos.writeInt(CryptoConstants.FORMAT_VERSION_V1)
+                    dos.write(salt)
+                    dos.write(indexIv)
+                    dos.writeInt(encryptedIndex.size)
+                    dos.write(encryptedIndex)
+                    FileInputStream(encryptedDataTempFile).use { it.copyTo(dos) }
+                    dos.flush()
+                }
             }
+        } finally {
+            encryptedDataTempFile.delete()
         }
     }
 
@@ -746,63 +728,63 @@ object VaultManager {
         val key = CryptoManager.deriveKey(password, header.salt)
 
         val keepEntries = existingEntries.filter { it.id != entryId }
-        val keepData = keepEntries.map { entry -> readFileBytes(context, vaultUri, header, entry, key) }
 
         val salt = CryptoManager.generateSalt()
         val newKey = CryptoManager.deriveKey(password, salt)
 
         val newEntries = mutableListOf<VaultEntry>()
-        val allEncryptedData = ByteArrayOutputStream()
         var currentOffset = 0L
+        val encryptedDataTempFile = java.io.File.createTempFile("bib_vault_v1_remove_", ".tmp", context.cacheDir)
+        try {
+            FileOutputStream(encryptedDataTempFile).use { encryptedDataOut ->
+                for ((idx, entry) in keepEntries.withIndex()) {
+                    onProgress?.invoke(idx + 1, keepEntries.size)
+                    val baseIv = CryptoManager.generateCtrBaseIv()
+                    val mac = Mac.getInstance("HmacSHA256").apply { init(newKey) }
+                    var chunkIndex = 0L
 
-        for ((idx, entry) in keepEntries.withIndex()) {
-            onProgress?.invoke(idx + 1, keepEntries.size)
-            val baseIv = CryptoManager.generateCtrBaseIv()
-            val plainData = keepData[idx]
-            val hmacAccumulator = ByteArrayOutputStream()
-            var chunkIndex = 0L
-            var bytesProcessed = 0
+                    while (chunkIndex < entry.chunkCount) {
+                        val chunk = readChunk(context, vaultUri, header, entry, chunkIndex, key)
+                        val encrypted = CryptoManager.encryptChunk(newKey, baseIv, chunkIndex, chunk)
+                        encryptedDataOut.write(encrypted)
+                        mac.update(encrypted)
+                        chunkIndex++
+                    }
 
-            while (bytesProcessed < plainData.size) {
-                val end = minOf(bytesProcessed + CryptoConstants.CHUNK_SIZE, plainData.size)
-                val chunk = plainData.copyOfRange(bytesProcessed, end)
-                val encrypted = CryptoManager.encryptChunk(newKey, baseIv, chunkIndex, chunk)
-                allEncryptedData.write(encrypted)
-                hmacAccumulator.write(encrypted)
-                bytesProcessed = end
-                chunkIndex++
+                    val hmac = mac.doFinal()
+                    newEntries.add(
+                        entry.copy(
+                            offset = currentOffset,
+                            baseIvHex = CryptoManager.bytesToHex(baseIv),
+                            hmacHex = CryptoManager.bytesToHex(hmac),
+                            chunkCount = chunkIndex.toInt()
+                        )
+                    )
+                    currentOffset += entry.encryptedSize
+                }
             }
 
-            val hmac = CryptoManager.computeHmac(newKey, hmacAccumulator.toByteArray())
-            newEntries.add(
-                entry.copy(
-                    offset = currentOffset,
-                    baseIvHex = CryptoManager.bytesToHex(baseIv),
-                    hmacHex = CryptoManager.bytesToHex(hmac),
-                    chunkCount = chunkIndex.toInt()
-                )
-            )
-            currentOffset += entry.encryptedSize
-        }
+            val indexJson = entriesToJson(newEntries)
+            val indexIv = CryptoManager.generateGcmIv()
+            val encryptedIndex = CryptoManager.encryptIndex(newKey, indexIv, indexJson.toByteArray(Charsets.UTF_8))
 
-        val indexJson = entriesToJson(newEntries)
-        val indexIv = CryptoManager.generateGcmIv()
-        val encryptedIndex = CryptoManager.encryptIndex(newKey, indexIv, indexJson.toByteArray(Charsets.UTF_8))
+            val outputStream = context.contentResolver.openOutputStream(vaultUri, "wt")
+                ?: throw IllegalStateException("Cannot write to vault: $vaultUri")
 
-        val outputStream = context.contentResolver.openOutputStream(vaultUri, "wt")
-            ?: throw IllegalStateException("Cannot write to vault: $vaultUri")
-
-        outputStream.use { stream ->
-            DataOutputStream(stream).use { dos ->
-                dos.write(CryptoConstants.MAGIC_BYTES)
-                dos.writeInt(CryptoConstants.FORMAT_VERSION_V1)
-                dos.write(salt)
-                dos.write(indexIv)
-                dos.writeInt(encryptedIndex.size)
-                dos.write(encryptedIndex)
-                dos.write(allEncryptedData.toByteArray())
-                dos.flush()
+            outputStream.use { stream ->
+                DataOutputStream(stream).use { dos ->
+                    dos.write(CryptoConstants.MAGIC_BYTES)
+                    dos.writeInt(CryptoConstants.FORMAT_VERSION_V1)
+                    dos.write(salt)
+                    dos.write(indexIv)
+                    dos.writeInt(encryptedIndex.size)
+                    dos.write(encryptedIndex)
+                    FileInputStream(encryptedDataTempFile).use { it.copyTo(dos) }
+                    dos.flush()
+                }
             }
+        } finally {
+            encryptedDataTempFile.delete()
         }
     }
 
@@ -834,9 +816,13 @@ object VaultManager {
 
         targetEntries.forEachIndexed { index, entry ->
             onProgress?.invoke(index + 1, targetEntries.size)
-            val bytes = readFileBytes(context, vaultUri, header, entry, key)
             val outputFile = resolveUniqueOutputFile(outputDir, entry.fileName)
-            FileOutputStream(outputFile).use { it.write(bytes) }
+            FileOutputStream(outputFile).use { out ->
+                for (chunkIndex in 0 until entry.chunkCount) {
+                    val chunk = readChunk(context, vaultUri, header, entry, chunkIndex.toLong(), key)
+                    out.write(chunk)
+                }
+            }
         }
         return targetEntries.size
     }

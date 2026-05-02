@@ -43,6 +43,8 @@ import com.example.bib_vault.util.MimeUtils
 import com.example.bib_vault.vault.VaultEntry
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 
@@ -62,6 +64,7 @@ fun VaultBrowserScreen(
     onLoadPreviewBytes: suspend (VaultEntry) -> ByteArray?,
     onLock: () -> Unit
 ) {
+    val maxPreviewBytes = 25L * 1024L * 1024L
     val context = LocalContext.current
     val prefs = remember {
         context.getSharedPreferences("vault_browser_settings", android.content.Context.MODE_PRIVATE)
@@ -105,22 +108,27 @@ fun VaultBrowserScreen(
             previewCache.clear()
             return@LaunchedEffect
         }
-        val previewableEntries = entries.filter { it.isImage || it.isVideo }
+        val previewableEntries = entries.filter {
+            (it.isImage || it.isVideo) && it.originalSize in 1..maxPreviewBytes
+        }
+        val previewLimiter = Semaphore(2)
         supervisorScope {
             previewableEntries
                 .filter { !previewCache.containsKey(it.id) }
                 .map { entry ->
                     async(Dispatchers.IO) {
-                        val bytes = onLoadPreviewBytes(entry)
-                        val mediaType = MimeUtils.getMediaType(entry.mimeType)
-                        val bitmap = when (mediaType) {
-                            MediaType.IMAGE ->
-                                bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-                            MediaType.VIDEO ->
-                                bytes?.let { extractVideoFrame(it) }
-                            else -> null
+                        previewLimiter.withPermit {
+                            val bytes = onLoadPreviewBytes(entry)
+                            val mediaType = MimeUtils.getMediaType(entry.mimeType)
+                            val bitmap = when (mediaType) {
+                                MediaType.IMAGE ->
+                                    bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                                MediaType.VIDEO ->
+                                    bytes?.let { extractVideoFrame(it) }
+                                else -> null
+                            }
+                            entry.id to bitmap
                         }
-                        entry.id to bitmap
                     }
                 }
                 .forEach { deferred ->
