@@ -42,6 +42,17 @@ import android.net.Uri
 import javax.crypto.SecretKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.app.Activity
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.view.WindowManager
+import android.media.AudioManager
+
+fun android.content.Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 /**
  * Full-screen media viewer/player.
@@ -87,10 +98,31 @@ fun MediaPlayerScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
                 },
+                actions = {
+                    val context = LocalContext.current
+                    if (mediaType == MediaType.VIDEO) {
+                        val activity = context.findActivity()
+                        var isLandscape by remember { 
+                            mutableStateOf(activity?.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) 
+                        }
+                        IconButton(onClick = {
+                            if (isLandscape) {
+                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                isLandscape = false
+                            } else {
+                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                isLandscape = true
+                            }
+                        }) {
+                            Icon(Icons.Default.ScreenRotation, "Rotate Screen")
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Black.copy(alpha = 0.7f),
                     titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
+                    navigationIconContentColor = Color.White,
+                    actionIconContentColor = Color.White
                 )
             )
         },
