@@ -107,8 +107,22 @@ object VaultManager {
             val baseIv = CryptoManager.generateCtrBaseIv()
 
             // Read and encrypt the file chunk by chunk
-            val inputStream = context.contentResolver.openInputStream(fileUri)
-                ?: throw IllegalStateException("Cannot open file: $fileUri")
+            var inputStream: java.io.InputStream? = null
+            try {
+                inputStream = context.contentResolver.openInputStream(fileUri)
+            } catch (e: Exception) {
+                val path = getFilePathFromUri(context, fileUri)
+                if (path != null) {
+                    inputStream = java.io.FileInputStream(java.io.File(path))
+                } else {
+                    throw IllegalStateException("Cannot open file via ContentResolver and could not resolve path: $fileUri", e)
+                }
+            }
+            if (inputStream == null) {
+                val path = getFilePathFromUri(context, fileUri)
+                if (path != null) inputStream = java.io.FileInputStream(java.io.File(path))
+                else throw IllegalStateException("Cannot open file: $fileUri")
+            }
 
             var originalSize = 0L
             var chunkIndex = 0L
@@ -164,12 +178,25 @@ object VaultManager {
         val encryptedIndex = CryptoManager.encryptIndex(key, indexIv, indexBytes)
 
         // Phase 3: Write the vault file
-        val pfd = context.contentResolver.openFileDescriptor(vaultUri, "w")
-            ?: throw IllegalStateException("Cannot write to vault: $vaultUri")
+        var outputStream: java.io.OutputStream? = null
+        try {
+            outputStream = context.contentResolver.openOutputStream(vaultUri)
+        } catch (e: Exception) {
+            val path = getFilePathFromUri(context, vaultUri)
+            if (path != null) {
+                outputStream = java.io.FileOutputStream(java.io.File(path))
+            } else {
+                throw IllegalStateException("Cannot write vault via ContentResolver and could not resolve path: $vaultUri", e)
+            }
+        }
+        if (outputStream == null) {
+            val path = getFilePathFromUri(context, vaultUri)
+            if (path != null) outputStream = java.io.FileOutputStream(java.io.File(path))
+            else throw IllegalStateException("Cannot write to vault: $vaultUri")
+        }
 
-        pfd.use {
-            val outputStream = FileOutputStream(it.fileDescriptor)
-            DataOutputStream(outputStream).use { dos ->
+        outputStream.use { stream ->
+            DataOutputStream(stream).use { dos ->
                 // Header
                 dos.write(CryptoConstants.MAGIC_BYTES)                         // 8 bytes
                 dos.writeInt(CryptoConstants.FORMAT_VERSION)                    // 4 bytes
@@ -420,8 +447,22 @@ object VaultManager {
             val mimeType = context.contentResolver.getType(fileUri) ?: MimeUtils.guessMimeType(fileName)
             val baseIv = CryptoManager.generateCtrBaseIv()
 
-            val inputStream = context.contentResolver.openInputStream(fileUri)
-                ?: throw IllegalStateException("Cannot open file: $fileUri")
+            var inputStream: java.io.InputStream? = null
+            try {
+                inputStream = context.contentResolver.openInputStream(fileUri)
+            } catch (e: Exception) {
+                val path = getFilePathFromUri(context, fileUri)
+                if (path != null) {
+                    inputStream = java.io.FileInputStream(java.io.File(path))
+                } else {
+                    throw IllegalStateException("Cannot open file via ContentResolver and could not resolve path: $fileUri", e)
+                }
+            }
+            if (inputStream == null) {
+                val path = getFilePathFromUri(context, fileUri)
+                if (path != null) inputStream = java.io.FileInputStream(java.io.File(path))
+                else throw IllegalStateException("Cannot open file: $fileUri")
+            }
 
             var originalSize = 0L
             var chunkIndex = 0L
@@ -466,12 +507,25 @@ object VaultManager {
         val indexIv = CryptoManager.generateGcmIv()
         val encryptedIndex = CryptoManager.encryptIndex(newKey, indexIv, indexBytes)
 
-        val pfd = context.contentResolver.openFileDescriptor(vaultUri, "wt")
-            ?: throw IllegalStateException("Cannot write to vault: $vaultUri")
+        var outputStream: java.io.OutputStream? = null
+        try {
+            outputStream = context.contentResolver.openOutputStream(vaultUri, "wt")
+        } catch (e: Exception) {
+            val path = getFilePathFromUri(context, vaultUri)
+            if (path != null) {
+                outputStream = java.io.FileOutputStream(java.io.File(path))
+            } else {
+                throw IllegalStateException("Cannot write vault via ContentResolver and could not resolve path: $vaultUri", e)
+            }
+        }
+        if (outputStream == null) {
+            val path = getFilePathFromUri(context, vaultUri)
+            if (path != null) outputStream = java.io.FileOutputStream(java.io.File(path))
+            else throw IllegalStateException("Cannot write to vault: $vaultUri")
+        }
 
-        pfd.use {
-            val outputStream = FileOutputStream(it.fileDescriptor)
-            DataOutputStream(outputStream).use { dos ->
+        outputStream.use { stream ->
+            DataOutputStream(stream).use { dos ->
                 dos.write(CryptoConstants.MAGIC_BYTES)
                 dos.writeInt(CryptoConstants.FORMAT_VERSION)
                 dos.write(salt)
@@ -547,12 +601,25 @@ object VaultManager {
         val indexIv = CryptoManager.generateGcmIv()
         val encryptedIndex = CryptoManager.encryptIndex(newKey, indexIv, indexBytes)
 
-        val pfd = context.contentResolver.openFileDescriptor(vaultUri, "wt")
-            ?: throw IllegalStateException("Cannot write to vault: $vaultUri")
+        var outputStream: java.io.OutputStream? = null
+        try {
+            outputStream = context.contentResolver.openOutputStream(vaultUri, "wt")
+        } catch (e: Exception) {
+            val path = getFilePathFromUri(context, vaultUri)
+            if (path != null) {
+                outputStream = java.io.FileOutputStream(java.io.File(path))
+            } else {
+                throw IllegalStateException("Cannot write vault via ContentResolver and could not resolve path: $vaultUri", e)
+            }
+        }
+        if (outputStream == null) {
+            val path = getFilePathFromUri(context, vaultUri)
+            if (path != null) outputStream = java.io.FileOutputStream(java.io.File(path))
+            else throw IllegalStateException("Cannot write to vault: $vaultUri")
+        }
 
-        pfd.use {
-            val outputStream = FileOutputStream(it.fileDescriptor)
-            DataOutputStream(outputStream).use { dos ->
+        outputStream.use { stream ->
+            DataOutputStream(stream).use { dos ->
                 dos.write(CryptoConstants.MAGIC_BYTES)
                 dos.writeInt(CryptoConstants.FORMAT_VERSION)
                 dos.write(salt)
