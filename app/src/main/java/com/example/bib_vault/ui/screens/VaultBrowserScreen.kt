@@ -1,7 +1,12 @@
 package com.example.bib_vault.ui.screens
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaDataSource
+import android.media.MediaMetadataRetriever
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -18,6 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,6 +33,10 @@ import com.example.bib_vault.util.FormatUtils
 import com.example.bib_vault.util.MediaType
 import com.example.bib_vault.util.MimeUtils
 import com.example.bib_vault.vault.VaultEntry
+import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withContext
 
 /**
  * Gallery-style vault file browser shown after successful unlock.
@@ -39,10 +50,43 @@ fun VaultBrowserScreen(
     onFileClick: (VaultEntry) -> Unit,
     onDeleteFile: (VaultEntry) -> Unit,
     onAddFiles: () -> Unit,
+    previewsEnabled: Boolean,
+    onLoadPreviewBytes: suspend (VaultEntry) -> ByteArray?,
     onLock: () -> Unit
 ) {
     var selectedFilter by remember { mutableStateOf(FilterType.ALL) }
     var showDeleteDialog by remember { mutableStateOf<VaultEntry?>(null) }
+    val previewCache = remember { mutableStateMapOf<String, Bitmap?>() }
+
+    LaunchedEffect(entries, previewsEnabled) {
+        if (!previewsEnabled) {
+            previewCache.clear()
+            return@LaunchedEffect
+        }
+        val previewableEntries = entries.filter { it.isImage || it.isVideo }
+        supervisorScope {
+            previewableEntries
+                .filter { !previewCache.containsKey(it.id) }
+                .map { entry ->
+                    async(Dispatchers.IO) {
+                        val bytes = onLoadPreviewBytes(entry)
+                        val mediaType = MimeUtils.getMediaType(entry.mimeType)
+                        val bitmap = when (mediaType) {
+                            MediaType.IMAGE ->
+                                bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                            MediaType.VIDEO ->
+                                bytes?.let { extractVideoFrame(it) }
+                            else -> null
+                        }
+                        entry.id to bitmap
+                    }
+                }
+                .forEach { deferred ->
+                    val (id, bitmap) = deferred.await()
+                    previewCache[id] = bitmap
+                }
+        }
+    }
 
     val filteredEntries = remember(entries, selectedFilter) {
         when (selectedFilter) {
@@ -156,6 +200,8 @@ fun VaultBrowserScreen(
                     items(filteredEntries, key = { it.id }) { entry ->
                         VaultFileCard(
                             entry = entry,
+                            previewsEnabled = previewsEnabled,
+                            previewBitmap = previewCache[entry.id],
                             onClick = { onFileClick(entry) },
                             onLongClick = { showDeleteDialog = entry }
                         )
@@ -200,6 +246,8 @@ fun VaultBrowserScreen(
 @Composable
 private fun VaultFileCard(
     entry: VaultEntry,
+    previewsEnabled: Boolean,
+    previewBitmap: Bitmap?,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -216,7 +264,6 @@ private fun VaultFileCard(
         MediaType.IMAGE -> Icons.Default.Image
         MediaType.OTHER -> Icons.Default.InsertDriveFile
     }
-
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -245,12 +292,21 @@ private fun VaultFileCard(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    typeIcon,
-                    contentDescription = null,
-                    tint = typeColor.copy(alpha = 0.7f),
-                    modifier = Modifier.size(48.dp)
-                )
+                if (previewBitmap != null && (mediaType == MediaType.IMAGE || mediaType == MediaType.VIDEO)) {
+                    Image(
+                        bitmap = previewBitmap.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        typeIcon,
+                        contentDescription = null,
+                        tint = typeColor.copy(alpha = 0.7f),
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
 
                 // Extension badge
                 Box(
@@ -344,3 +400,30 @@ private fun FilterTab(
 }
 
 private enum class FilterType { ALL, VIDEO, AUDIO, IMAGE }
+
+private class ByteArrayMediaDataSource(
+    private val data: ByteArray
+) : MediaDataSource() {
+    override fun getSize(): Long = data.size.toLong()
+
+    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+        if (position >= data.size) return -1
+        val length = minOf(size, data.size - position.toInt())
+        System.arraycopy(data, position.toInt(), buffer, offset, length)
+        return length
+    }
+
+    override fun close() = Unit
+}
+
+private fun extractVideoFrame(videoBytes: ByteArray): Bitmap? {
+    return try {
+        val retriever = MediaMetadataRetriever()
+        retriever.setDataSource(ByteArrayMediaDataSource(videoBytes))
+        val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        retriever.release()
+        frame
+    } catch (_: Exception) {
+        null
+    }
+}

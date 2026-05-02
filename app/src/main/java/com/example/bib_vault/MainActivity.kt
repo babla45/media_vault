@@ -86,6 +86,7 @@ private fun BibVaultApp() {
     val vaultState by viewModel.vaultState.collectAsState()
     val progress by viewModel.progress.collectAsState()
     var screenshotProtectionEnabled by rememberSaveable { mutableStateOf(true) }
+    var mediaPreviewsEnabled by rememberSaveable { mutableStateOf(true) }
 
     LaunchedEffect(activity, screenshotProtectionEnabled) {
         val window = activity?.window ?: return@LaunchedEffect
@@ -325,6 +326,10 @@ private fun BibVaultApp() {
                     screenshotProtectionEnabled = screenshotProtectionEnabled,
                     onToggleScreenshotProtection = { enabled ->
                         screenshotProtectionEnabled = enabled
+                    },
+                    mediaPreviewsEnabled = mediaPreviewsEnabled,
+                    onToggleMediaPreviews = { enabled ->
+                        mediaPreviewsEnabled = enabled
                     }
                 )
             }
@@ -373,6 +378,10 @@ private fun BibVaultApp() {
                             } catch (e: android.content.ActivityNotFoundException) {
                                 fallbackAddFilePicker.launch("*/*")
                             }
+                        },
+                        previewsEnabled = mediaPreviewsEnabled,
+                        onLoadPreviewBytes = { entry ->
+                            viewModel.decryptImageBytes(entry)
                         },
                         onLock = {
                             currentPassword = ""
