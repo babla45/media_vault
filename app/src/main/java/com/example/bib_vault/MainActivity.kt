@@ -374,6 +374,9 @@ private fun BibVaultApp() {
                         onDeleteFiles = { selectedEntries ->
                             viewModel.removeFiles(selectedEntries.map { it.id }, currentPassword)
                             },
+                        onRestoreFiles = { selectedEntries ->
+                            viewModel.restoreFiles(selectedEntries.map { it.id }, currentPassword)
+                        },
                             onAddFiles = {
                                 try {
                                     addFilePicker.launch(arrayOf("video/*", "audio/*", "image/*"))

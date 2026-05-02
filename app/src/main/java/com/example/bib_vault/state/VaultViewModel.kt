@@ -203,6 +203,29 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Restore multiple files from vault to the vault file directory.
+     */
+    fun restoreFiles(entryIds: List<String>, password: String) {
+        val currentState = _vaultState.value
+        if (currentState !is VaultState.Unlocked || entryIds.isEmpty()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _vaultState.value = VaultState.Loading("Restoring files...")
+                VaultManager.restoreFiles(
+                    context = getApplication(),
+                    vaultUri = currentState.vaultUri,
+                    password = password,
+                    entryIds = entryIds
+                )
+                openVaultInternal(currentState.vaultUri, password)
+            } catch (e: Exception) {
+                _vaultState.value = VaultState.Error("Failed to restore files: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Decrypt an image file entirely in memory for display.
      * Returns null on failure.
      */

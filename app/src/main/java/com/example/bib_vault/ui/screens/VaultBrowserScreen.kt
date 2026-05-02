@@ -10,8 +10,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.lazy.itemsIndexed as lazyItemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -28,10 +30,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import com.example.bib_vault.ui.theme.*
 import com.example.bib_vault.util.FormatUtils
 import com.example.bib_vault.util.MediaType
@@ -53,19 +57,46 @@ fun VaultBrowserScreen(
     entries: List<VaultEntry>,
     onFileClick: (VaultEntry) -> Unit,
     onDeleteFiles: (List<VaultEntry>) -> Unit,
+    onRestoreFiles: (List<VaultEntry>) -> Unit,
     onAddFiles: () -> Unit,
     onLoadPreviewBytes: suspend (VaultEntry) -> ByteArray?,
     onLock: () -> Unit
 ) {
-    var selectedFilter by rememberSaveable { mutableStateOf(FilterType.ALL) }
+    val context = LocalContext.current
+    val prefs = remember {
+        context.getSharedPreferences("vault_browser_settings", android.content.Context.MODE_PRIVATE)
+    }
+
+    val savedFilterOrdinal = remember {
+        prefs.getInt("selected_filter_ordinal", FilterType.ALL.ordinal)
+            .coerceIn(0, FilterType.entries.lastIndex)
+    }
+    val savedShowListView = remember { prefs.getBoolean("show_list_view", true) }
+    val savedListNamesOnly = remember { prefs.getBoolean("list_names_only", true) }
+    val savedPreviewsEnabled = remember { prefs.getBoolean("previews_enabled", true) }
+
+    var selectedFilter by rememberSaveable {
+        mutableStateOf(FilterType.entries[savedFilterOrdinal])
+    }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showRestoreDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
-    var showListView by rememberSaveable { mutableStateOf(true) }
-    var listNamesOnly by rememberSaveable { mutableStateOf(true) }
-    var previewsEnabled by rememberSaveable { mutableStateOf(true) }
+    var showListView by rememberSaveable { mutableStateOf(savedShowListView) }
+    var listNamesOnly by rememberSaveable { mutableStateOf(savedListNamesOnly) }
+    var previewsEnabled by rememberSaveable { mutableStateOf(savedPreviewsEnabled) }
     val previewCache = remember { mutableStateMapOf<String, Bitmap?>() }
     val selectedIds = remember { mutableStateListOf<String>() }
     val isSelectionMode = selectedIds.isNotEmpty()
+    val namesOnlyListState = rememberLazyListState()
+
+    LaunchedEffect(selectedFilter, showListView, listNamesOnly, previewsEnabled) {
+        prefs.edit()
+            .putInt("selected_filter_ordinal", selectedFilter.ordinal)
+            .putBoolean("show_list_view", showListView)
+            .putBoolean("list_names_only", listNamesOnly)
+            .putBoolean("previews_enabled", previewsEnabled)
+            .apply()
+    }
 
     LaunchedEffect(entries, previewsEnabled) {
         if (!previewsEnabled) {
@@ -131,6 +162,26 @@ fun VaultBrowserScreen(
                 },
                 actions = {
                     if (isSelectionMode) {
+                        val allFilteredSelected = filteredEntries.isNotEmpty() &&
+                            filteredEntries.all { selectedIds.contains(it.id) }
+                        IconButton(
+                            onClick = {
+                                if (allFilteredSelected) {
+                                    selectedIds.removeAll(filteredEntries.map { it.id }.toSet())
+                                } else {
+                                    filteredEntries.forEach { if (!selectedIds.contains(it.id)) selectedIds.add(it.id) }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                if (allFilteredSelected) Icons.Default.Deselect else Icons.Default.SelectAll,
+                                if (allFilteredSelected) "Clear selected in tab" else "Select all in tab",
+                                tint = VaultPrimaryLight
+                            )
+                        }
+                        IconButton(onClick = { showRestoreDialog = true }) {
+                            Icon(Icons.Default.Restore, "Restore selected", tint = VaultPrimaryLight)
+                        }
                         IconButton(onClick = { showDeleteDialog = true }) {
                             Icon(Icons.Default.Delete, "Delete selected", tint = VaultError)
                         }
@@ -212,8 +263,42 @@ fun VaultBrowserScreen(
                 if (showListView) {
                     if (listNamesOnly) {
                         LazyColumn(
+                            state = namesOnlyListState,
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier.pointerInput(filteredEntries, isSelectionMode) {
+                                if (!isSelectionMode || filteredEntries.isEmpty()) return@pointerInput
+                                var anchorIndex = -1
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { offset ->
+                                        val hit = namesOnlyListState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull { info ->
+                                                offset.y >= info.offset && offset.y <= info.offset + info.size
+                                            } ?: return@detectDragGesturesAfterLongPress
+                                        anchorIndex = hit.index
+                                        filteredEntries.getOrNull(anchorIndex)?.let { entry ->
+                                            if (!selectedIds.contains(entry.id)) selectedIds.add(entry.id)
+                                        }
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        if (anchorIndex < 0) return@detectDragGesturesAfterLongPress
+                                        val hit = namesOnlyListState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull { info ->
+                                                val y = change.position.y
+                                                y >= info.offset && y <= info.offset + info.size
+                                            } ?: return@detectDragGesturesAfterLongPress
+                                        val current = hit.index
+                                        val start = minOf(anchorIndex, current)
+                                        val end = maxOf(anchorIndex, current)
+                                        for (i in start..end) {
+                                            filteredEntries.getOrNull(i)?.let { entry ->
+                                                if (!selectedIds.contains(entry.id)) selectedIds.add(entry.id)
+                                            }
+                                        }
+                                    }
+                                )
+                            }
                         ) {
                             lazyItemsIndexed(filteredEntries, key = { _, it -> it.id }) { index, entry ->
                                 VaultFileNameRow(
@@ -392,6 +477,37 @@ fun VaultBrowserScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Restore confirmation dialog
+    if (showRestoreDialog && selectedIds.isNotEmpty()) {
+        val selectedEntries = entries.filter { selectedIds.contains(it.id) }
+        AlertDialog(
+            onDismissRequest = { showRestoreDialog = false },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = VaultSurface,
+            icon = { Icon(Icons.Default.Restore, null, tint = VaultPrimaryLight) },
+            title = { Text("Restore ${selectedEntries.size} file(s)") },
+            text = {
+                Text("Restore ${selectedEntries.size} selected file(s) to the same folder as this vault?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRestoreFiles(selectedEntries)
+                        selectedIds.clear()
+                        showRestoreDialog = false
+                    }
+                ) {
+                    Text("Restore")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestoreDialog = false }) {
                     Text("Cancel")
                 }
             }

@@ -632,6 +632,55 @@ object VaultManager {
         }
     }
 
+    /**
+     * Restore multiple files from vault to the same directory as the vault file.
+     * Files are written in original (decrypted) form. Name collisions are resolved safely.
+     *
+     * @return Number of restored files.
+     */
+    fun restoreFiles(
+        context: Context,
+        vaultUri: Uri,
+        password: String,
+        entryIds: List<String>,
+        onProgress: ((Int, Int) -> Unit)? = null
+    ): Int {
+        if (entryIds.isEmpty()) return 0
+
+        val vaultPath = getFilePathFromUri(context, vaultUri)
+            ?: throw IllegalStateException("Cannot resolve vault path for restore destination")
+        val vaultFile = java.io.File(vaultPath)
+        val outputDir = vaultFile.parentFile
+            ?: throw IllegalStateException("Cannot resolve vault parent directory")
+        if (!outputDir.exists()) outputDir.mkdirs()
+
+        val (header, allEntries) = openVault(context, vaultUri, password)
+        val key = CryptoManager.deriveKey(password, header.salt)
+        val targetEntries = allEntries.filter { it.id in entryIds.toSet() }
+
+        targetEntries.forEachIndexed { index, entry ->
+            onProgress?.invoke(index + 1, targetEntries.size)
+            val bytes = readFileBytes(context, vaultUri, header, entry, key)
+            val outputFile = resolveUniqueOutputFile(outputDir, entry.fileName)
+            FileOutputStream(outputFile).use { it.write(bytes) }
+        }
+        return targetEntries.size
+    }
+
+    private fun resolveUniqueOutputFile(dir: java.io.File, originalName: String): java.io.File {
+        val dot = originalName.lastIndexOf('.')
+        val base = if (dot > 0) originalName.substring(0, dot) else originalName
+        val ext = if (dot > 0) originalName.substring(dot) else ""
+
+        var candidate = java.io.File(dir, originalName)
+        var counter = 1
+        while (candidate.exists()) {
+            candidate = java.io.File(dir, "${base}_restored_$counter$ext")
+            counter++
+        }
+        return candidate
+    }
+
     // ──────────────────────────────────────
     //  Private helpers
     // ──────────────────────────────────────
