@@ -160,6 +160,8 @@ fun MediaPlayerScreen(
     onDecryptImage: suspend (VaultEntry) -> ByteArray?,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
     val sortedEntries = remember(entries) {
         entries.values.sortedWith(compareBy<VaultEntry> { it.addedTimestamp }.thenBy { it.fileName })
     }
@@ -180,10 +182,25 @@ fun MediaPlayerScreen(
     }
     val canSwipePrev = currentImageIndex > 0
     val canSwipeNext = currentImageIndex >= 0 && currentImageIndex < imageEntries.lastIndex
+    val isImage = mediaType == MediaType.IMAGE
+    var imageChromeVisible by rememberSaveable { mutableStateOf(true) }
+
+    LaunchedEffect(isImage, imageChromeVisible, activity) {
+        if (!isImage) return@LaunchedEffect
+        setFullscreenSystemBarsVisible(activity, visible = imageChromeVisible)
+    }
+
+    DisposableEffect(isImage, activity) {
+        onDispose {
+            if (isImage) {
+                restoreSystemBarsVisibility(activity)
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
-            if (!isVideo) {
+            if (!isVideo && (!isImage || imageChromeVisible)) {
                 TopAppBar(
                     title = {
                         Column {
@@ -241,6 +258,10 @@ fun MediaPlayerScreen(
                     EncryptedImageViewer(
                         entry = currentEntry,
                         onDecryptImage = onDecryptImage,
+                        showNavButtons = imageChromeVisible,
+                        onToggleChrome = {
+                            imageChromeVisible = !imageChromeVisible
+                        },
                         canSwipePrev = canSwipePrev,
                         canSwipeNext = canSwipeNext,
                         onSwipePrev = {
@@ -1025,6 +1046,8 @@ private fun AudioPlayerUI(
 private fun EncryptedImageViewer(
     entry: VaultEntry,
     onDecryptImage: suspend (VaultEntry) -> ByteArray?,
+    showNavButtons: Boolean,
+    onToggleChrome: () -> Unit,
     canSwipePrev: Boolean,
     canSwipeNext: Boolean,
     onSwipePrev: () -> Unit,
@@ -1037,9 +1060,9 @@ private fun EncryptedImageViewer(
     // Zoom/pan state
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    var rotationDeg by remember { mutableFloatStateOf(0f) }
     val swipeThreshold = 90f
     var horizontalDragAccumulator by remember { mutableFloatStateOf(0f) }
-    var showNavButtons by remember { mutableStateOf(true) }
 
     LaunchedEffect(entry.id) {
         isLoading = true
@@ -1047,8 +1070,8 @@ private fun EncryptedImageViewer(
         error = null
         scale = 1f
         offset = Offset.Zero
+        rotationDeg = 0f
         horizontalDragAccumulator = 0f
-        showNavButtons = true
         try {
             val bytes = withContext(Dispatchers.IO) {
                 onDecryptImage(entry)
@@ -1094,12 +1117,13 @@ private fun EncryptedImageViewer(
                                 .graphicsLayer(
                                     scaleX = scale,
                                     scaleY = scale,
+                                    rotationZ = rotationDeg,
                                     translationX = offset.x,
                                     translationY = offset.y
                                 )
                                 .pointerInput(entry.id) {
                                     detectTapGestures(
-                                        onTap = { showNavButtons = !showNavButtons }
+                                        onTap = { onToggleChrome() }
                                     )
                                 }
                                 .pointerInput(entry.id, scale, canSwipePrev, canSwipeNext) {
@@ -1139,6 +1163,27 @@ private fun EncryptedImageViewer(
                                     }
                                 }
                         )
+
+                        if (showNavButtons) {
+                            FilledIconButton(
+                                onClick = {
+                                    rotationDeg = (rotationDeg - 90f + 360f) % 360f
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 14.dp, end = 14.dp)
+                                    .size(44.dp),
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = Color.Black.copy(alpha = 0.45f),
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.RotateLeft,
+                                    contentDescription = "Rotate image 90 degrees anticlockwise"
+                                )
+                            }
+                        }
 
                         // Prev/Next overlay buttons (work even if swipe doesn't)
                         if (showNavButtons && canSwipePrev) {
