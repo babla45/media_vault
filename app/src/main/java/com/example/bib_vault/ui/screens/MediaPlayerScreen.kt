@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
@@ -39,6 +40,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.R as Media3UiR
 import com.example.bib_vault.player.EncryptedDataSourceFactory
 import com.example.bib_vault.ui.theme.*
 import com.example.bib_vault.util.FormatUtils
@@ -53,6 +55,7 @@ import kotlinx.coroutines.withContext
 import android.app.Activity
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.view.View
 import android.view.WindowManager
 import android.media.AudioManager
 import android.provider.Settings
@@ -109,8 +112,7 @@ private enum class VideoTouchZone { Left, Center, Right }
 
 private enum class VideoTouchMode {
     Brightness,
-    Volume,
-    Seek
+    Volume
 }
 
 /**
@@ -133,64 +135,51 @@ fun MediaPlayerScreen(
     onBack: () -> Unit
 ) {
     val mediaType = MimeUtils.getMediaType(entry.mimeType)
+    val isVideo = mediaType == MediaType.VIDEO
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            entry.fileName,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            "${MimeUtils.getTypeLabel(entry.mimeType)} • ${FormatUtils.formatFileSize(entry.originalSize)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = VaultOnSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                },
-                actions = {
-                    val context = LocalContext.current
-                    if (mediaType == MediaType.VIDEO) {
-                        val activity = context.findActivity()
-                        var isLandscape by remember { 
-                            mutableStateOf(activity?.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) 
+            if (!isVideo) {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                entry.fileName,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                "${MimeUtils.getTypeLabel(entry.mimeType)} • ${FormatUtils.formatFileSize(entry.originalSize)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = VaultOnSurfaceVariant
+                            )
                         }
-                        IconButton(onClick = {
-                            if (isLandscape) {
-                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                                isLandscape = false
-                            } else {
-                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                                isLandscape = true
-                            }
-                        }) {
-                            Icon(Icons.Default.ScreenRotation, "Rotate Screen")
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black.copy(alpha = 0.7f),
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Black.copy(alpha = 0.7f),
+                        titleContentColor = Color.White,
+                        navigationIconContentColor = Color.White,
+                        actionIconContentColor = Color.White
+                    )
                 )
-            )
+            }
         },
         containerColor = Color.Black
     ) { padding ->
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+            modifier = if (isVideo) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            },
             contentAlignment = Alignment.Center
         ) {
             when (mediaType) {
@@ -290,9 +279,17 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
     val touchSlop = LocalViewConfiguration.current.touchSlop
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     val playerViewHandle = rememberUpdatedState(playerViewRef)
+    var isControllerVisible by remember { mutableStateOf(false) }
+    var isLandscape by remember {
+        mutableStateOf(activity?.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)
+    }
+    var showSeekSettings by remember { mutableStateOf(false) }
+    var seekButtonStepSec by rememberSaveable { mutableIntStateOf(5) }
+    var seekButtonStepDraftSec by remember { mutableFloatStateOf(seekButtonStepSec.toFloat()) }
+    var currentPositionMs by remember { mutableLongStateOf(0L) }
+    var durationMs by remember { mutableLongStateOf(0L) }
 
     var screenHeightPx by remember { mutableFloatStateOf(1f) }
-    var centerWidthPx by remember { mutableFloatStateOf(1f) }
     var hud by remember { mutableStateOf<VideoGestureHud>(VideoGestureHud.Hidden) }
 
     LaunchedEffect(hud) {
@@ -307,6 +304,61 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
         }
     }
 
+    fun bindSeekButtons(stepSec: Int) {
+        val pv = playerViewRef ?: return
+        val stepMs = stepSec * 1000L
+
+        listOf(
+            Media3UiR.id.exo_rew,
+            Media3UiR.id.exo_rew_with_amount
+        ).forEach { id ->
+            pv.findViewById<View>(id)?.setOnClickListener {
+                val newPos = (exoPlayer.currentPosition - stepMs).coerceAtLeast(0L)
+                exoPlayer.seekTo(newPos)
+            }
+        }
+        listOf(
+            Media3UiR.id.exo_ffwd,
+            Media3UiR.id.exo_ffwd_with_amount
+        ).forEach { id ->
+            pv.findViewById<View>(id)?.setOnClickListener {
+                val dur = exoPlayer.duration
+                val maxPos = if (dur > 0) dur else Long.MAX_VALUE
+                val newPos = (exoPlayer.currentPosition + stepMs).coerceAtMost(maxPos)
+                exoPlayer.seekTo(newPos)
+            }
+        }
+    }
+
+    LaunchedEffect(playerViewRef, seekButtonStepSec, isControllerVisible) {
+        // Controller subviews can be recreated when shown/hidden; re-bind on each change.
+        bindSeekButtons(seekButtonStepSec)
+    }
+
+    DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                val dur = exoPlayer.duration
+                if (dur > 0) {
+                    durationMs = dur
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose { exoPlayer.removeListener(listener) }
+    }
+
+    LaunchedEffect(exoPlayer) {
+        while (true) {
+            currentPositionMs = exoPlayer.currentPosition
+            val dur = exoPlayer.duration
+            if (dur > 0) {
+                durationMs = dur
+            }
+            delay(250)
+        }
+    }
+
     val sideZoneFraction = 0.36f
     val dragSensitivity = 1.15f
 
@@ -315,8 +367,6 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
             .fillMaxSize()
             .onSizeChanged {
                 screenHeightPx = it.height.toFloat().coerceAtLeast(1f)
-                val w = it.width.toFloat().coerceAtLeast(1f)
-                centerWidthPx = (w * (1f - 2f * sideZoneFraction)).coerceAtLeast(1f)
             }
     ) {
         AndroidView(
@@ -324,152 +374,145 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = true
+                    controllerAutoShow = true
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            isControllerVisible = visibility == View.VISIBLE
+                        }
+                    )
                     playerViewRef = this
                 }
             },
             update = { pv ->
                 playerViewRef = pv
+                bindSeekButtons(seekButtonStepSec)
             },
             modifier = Modifier.fillMaxSize()
         )
 
         // Single overlay: drags = brightness / volume / seek; short tap = show PlayerView controller
-        Box(
-            Modifier
-                .fillMaxSize()
-                .pointerInput(
-                    touchSlop,
-                    screenHeightPx,
-                    centerWidthPx,
-                    sideZoneFraction,
-                    dragSensitivity,
-                    activity,
-                    context,
-                    audioManager,
-                    maxMusicVolume,
-                    exoPlayer
-                ) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown()
-                        val width = size.width.toFloat().coerceAtLeast(1f)
-                        val leftBound = width * sideZoneFraction
-                        val rightBound = width * (1f - sideZoneFraction)
+        val gestureOverlayModifier =
+            if (isControllerVisible) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(
+                        touchSlop,
+                        screenHeightPx,
+                        sideZoneFraction,
+                        dragSensitivity,
+                        activity,
+                        context,
+                        audioManager,
+                        maxMusicVolume,
+                        exoPlayer
+                    ) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val width = size.width.toFloat().coerceAtLeast(1f)
+                            val leftBound = width * sideZoneFraction
+                            val rightBound = width * (1f - sideZoneFraction)
 
-                        fun zoneAt(x: Float) = when {
-                            x < leftBound -> VideoTouchZone.Left
-                            x > rightBound -> VideoTouchZone.Right
-                            else -> VideoTouchZone.Center
-                        }
-
-                        val startZone = zoneAt(down.position.x)
-                        var totalDx = 0f
-                        var totalDy = 0f
-                        var mode: VideoTouchMode? = null
-                        var dragStartBrightness = 0f
-                        var dragStartVolFraction = 0f
-                        var seekBasePos = 0L
-                        var seekAccumDx = 0f
-
-                        gestureLoop@ while (true) {
-                            val event = awaitPointerEvent(PointerEventPass.Main)
-                            val change = event.changes.find { it.id == down.id } ?: break
-                            if (change.changedToUpIgnoreConsumed()) {
-                                if (mode == null) {
-                                    val dist = hypot(totalDx.toDouble(), totalDy.toDouble()).toFloat()
-                                    if (dist < touchSlop) {
-                                        playerViewHandle.value?.showController()
-                                    }
-                                }
-                                break
+                            fun zoneAt(x: Float) = when {
+                                x < leftBound -> VideoTouchZone.Left
+                                x > rightBound -> VideoTouchZone.Right
+                                else -> VideoTouchZone.Center
                             }
 
-                            val dx = change.positionChange().x
-                            val dy = change.positionChange().y
-                            totalDx += dx
-                            totalDy += dy
+                            val startZone = zoneAt(down.position.x)
+                            var totalDx = 0f
+                            var totalDy = 0f
+                            var mode: VideoTouchMode? = null
+                            var dragStartBrightness = 0f
+                            var dragStartVolFraction = 0f
 
-                            if (mode == null) {
-                                val dist = hypot(totalDx.toDouble(), totalDy.toDouble()).toFloat()
-                                if (dist >= touchSlop) {
-                                    val ax = abs(totalDx)
-                                    val ay = abs(totalDy)
-                                    mode = when (startZone) {
-                                        VideoTouchZone.Left ->
-                                            if (ay >= ax) VideoTouchMode.Brightness else null
-                                        VideoTouchZone.Right ->
-                                            if (ay >= ax) VideoTouchMode.Volume else null
-                                        VideoTouchZone.Center ->
-                                            if (ax >= ay) VideoTouchMode.Seek else null
-                                    }
-                                    when (mode) {
-                                        VideoTouchMode.Brightness -> {
-                                            dragStartBrightness =
-                                                currentWindowBrightnessFraction(activity)
-                                                    ?: readSystemBrightnessFraction(context)
-                                            hud = VideoGestureHud.BrightnessLevel(dragStartBrightness)
-                                        }
-                                        VideoTouchMode.Volume -> {
-                                            dragStartVolFraction =
-                                                audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                                                    .toFloat() / maxMusicVolume
-                                            hud = VideoGestureHud.VolumeLevel(dragStartVolFraction)
-                                        }
-                                        VideoTouchMode.Seek -> {
-                                            seekBasePos = exoPlayer.currentPosition
-                                            seekAccumDx = 0f
-                                            val dur = exoPlayer.duration
-                                            if (dur > 0 && dur != C.TIME_UNSET) {
-                                                hud = VideoGestureHud.Seeking(seekBasePos, dur)
+                            gestureLoop@ while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Main)
+                                val change = event.changes.find { it.id == down.id } ?: break
+                                if (change.changedToUpIgnoreConsumed()) {
+                                    if (mode == null) {
+                                        val dist = hypot(totalDx.toDouble(), totalDy.toDouble()).toFloat()
+                                        if (dist < touchSlop) {
+                                            playerViewHandle.value?.let { pv ->
+                                                if (isControllerVisible) {
+                                                    pv.hideController()
+                                                } else {
+                                                    pv.showController()
+                                                }
                                             }
                                         }
-                                        null -> Unit
                                     }
+                                    break
                                 }
-                            }
 
-                            when (mode) {
-                                VideoTouchMode.Brightness -> {
-                                    change.consume()
-                                    val act = activity ?: continue@gestureLoop
-                                    val level =
-                                        (dragStartBrightness - totalDy / screenHeightPx * dragSensitivity)
-                                            .coerceIn(0f, 1f)
-                                    applyWindowBrightness(act, level)
-                                    hud = VideoGestureHud.BrightnessLevel(level)
-                                }
-                                VideoTouchMode.Volume -> {
-                                    change.consume()
-                                    val frac =
-                                        (dragStartVolFraction - totalDy / screenHeightPx * dragSensitivity)
-                                            .coerceIn(0f, 1f)
-                                    val idx = (frac * maxMusicVolume).roundToInt()
-                                        .coerceIn(0, maxMusicVolume)
-                                    audioManager.setStreamVolume(
-                                        AudioManager.STREAM_MUSIC,
-                                        idx,
-                                        0
-                                    )
-                                    hud = VideoGestureHud.VolumeLevel(frac)
-                                }
-                                VideoTouchMode.Seek -> {
-                                    change.consume()
-                                    val dur = exoPlayer.duration
-                                    if (dur > 0 && dur != C.TIME_UNSET) {
-                                        seekAccumDx += change.positionChange().x
-                                        val deltaMs = (seekAccumDx / centerWidthPx) * dur.toFloat()
-                                        val newPos =
-                                            (seekBasePos + deltaMs.toLong()).coerceIn(0L, dur)
-                                        exoPlayer.seekTo(newPos)
-                                        hud = VideoGestureHud.Seeking(newPos, dur)
+                                val dx = change.positionChange().x
+                                val dy = change.positionChange().y
+                                totalDx += dx
+                                totalDy += dy
+
+                                if (mode == null) {
+                                    val dist = hypot(totalDx.toDouble(), totalDy.toDouble()).toFloat()
+                                    if (dist >= touchSlop) {
+                                        val ax = abs(totalDx)
+                                        val ay = abs(totalDy)
+                                        mode = when (startZone) {
+                                            VideoTouchZone.Left ->
+                                                if (ay >= ax) VideoTouchMode.Brightness else null
+                                            VideoTouchZone.Right ->
+                                                if (ay >= ax) VideoTouchMode.Volume else null
+                                            VideoTouchZone.Center -> null
+                                        }
+                                        when (mode) {
+                                            VideoTouchMode.Brightness -> {
+                                                dragStartBrightness =
+                                                    currentWindowBrightnessFraction(activity)
+                                                        ?: readSystemBrightnessFraction(context)
+                                                hud = VideoGestureHud.BrightnessLevel(dragStartBrightness)
+                                            }
+                                            VideoTouchMode.Volume -> {
+                                                dragStartVolFraction =
+                                                    audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                                                        .toFloat() / maxMusicVolume
+                                                hud = VideoGestureHud.VolumeLevel(dragStartVolFraction)
+                                            }
+                                            null -> Unit
+                                        }
                                     }
                                 }
-                                null -> Unit
+
+                                when (mode) {
+                                    VideoTouchMode.Brightness -> {
+                                        change.consume()
+                                        val act = activity ?: continue@gestureLoop
+                                        val level =
+                                            (dragStartBrightness - totalDy / screenHeightPx * dragSensitivity)
+                                                .coerceIn(0f, 1f)
+                                        applyWindowBrightness(act, level)
+                                        hud = VideoGestureHud.BrightnessLevel(level)
+                                    }
+                                    VideoTouchMode.Volume -> {
+                                        change.consume()
+                                        val frac =
+                                            (dragStartVolFraction - totalDy / screenHeightPx * dragSensitivity)
+                                                .coerceIn(0f, 1f)
+                                        val idx = (frac * maxMusicVolume).roundToInt()
+                                            .coerceIn(0, maxMusicVolume)
+                                        audioManager.setStreamVolume(
+                                            AudioManager.STREAM_MUSIC,
+                                            idx,
+                                            0
+                                        )
+                                        hud = VideoGestureHud.VolumeLevel(frac)
+                                    }
+                                    null -> Unit
+                                }
                             }
                         }
                     }
-                }
-        )
+            }
+        Box(gestureOverlayModifier)
 
         when (val state = hud) {
             is VideoGestureHud.BrightnessLevel -> {
@@ -514,6 +557,98 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                 )
             }
             VideoGestureHud.Hidden -> Unit
+        }
+
+        if (isControllerVisible) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 24.dp, end = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                IconButton(
+                    onClick = {
+                        seekButtonStepDraftSec = seekButtonStepSec.toFloat()
+                        showSeekSettings = true
+                    },
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                ) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = "Seek Settings",
+                        tint = Color.White
+                    )
+                }
+            }
+
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 72.dp),
+                color = Color.Black.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = "${FormatUtils.formatDuration(currentPositionMs)} / ${
+                        if (durationMs > 0) FormatUtils.formatDuration(durationMs) else "--:--"
+                    }",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+
+        }
+
+        if (showSeekSettings) {
+            AlertDialog(
+                onDismissRequest = { showSeekSettings = false },
+                title = { Text("Seek Button Time") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Set rewind/forward step: ${seekButtonStepDraftSec.toInt()} sec")
+                        Slider(
+                            value = seekButtonStepDraftSec,
+                            onValueChange = { seekButtonStepDraftSec = it },
+                            valueRange = 1f..30f,
+                            steps = 28
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                if (isLandscape) {
+                                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                    isLandscape = false
+                                } else {
+                                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                    isLandscape = true
+                                }
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.ScreenRotation,
+                                contentDescription = null
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (isLandscape) "Switch to Portrait" else "Switch to Landscape")
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            seekButtonStepSec = seekButtonStepDraftSec.toInt().coerceIn(1, 30)
+                            showSeekSettings = false
+                        }
+                    ) {
+                        Text("Apply")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSeekSettings = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }

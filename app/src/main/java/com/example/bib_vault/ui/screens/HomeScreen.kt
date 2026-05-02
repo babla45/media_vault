@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +20,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -32,8 +34,12 @@ import com.example.bib_vault.ui.theme.*
 @Composable
 fun HomeScreen(
     onCreateVault: () -> Unit,
-    onOpenVault: () -> Unit
+    onOpenVault: () -> Unit,
+    screenshotProtectionEnabled: Boolean,
+    onToggleScreenshotProtection: (Boolean) -> Unit
 ) {
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -41,6 +47,21 @@ fun HomeScreen(
     ) {
         // Ambient glow effects in background
         AmbientGlowBackground()
+
+        IconButton(
+            onClick = { showSettingsDialog = true },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 8.dp, end = 16.dp)
+                .background(GlassWhite, CircleShape)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = VaultPrimaryLight
+            )
+        }
 
         Column(
             modifier = Modifier
@@ -145,17 +166,32 @@ fun HomeScreen(
             }
 
             Spacer(modifier = Modifier.weight(0.2f))
-
-            // Footer
-            Text(
-                text = "Your media, your password, your privacy.",
-                style = MaterialTheme.typography.bodySmall,
-                color = VaultOnSurfaceVariant.copy(alpha = 0.5f),
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+
+    if (showSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            title = { Text("Settings") },
+            text = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Screenshot protection")
+                    Switch(
+                        checked = screenshotProtectionEnabled,
+                        onCheckedChange = onToggleScreenshotProtection
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSettingsDialog = false }) {
+                    Text("Done")
+                }
+            }
+        )
     }
 }
 

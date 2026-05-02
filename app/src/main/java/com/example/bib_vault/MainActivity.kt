@@ -80,10 +80,24 @@ private fun queryFileInfo(context: Context, uri: Uri): Pair<String, Long> {
 @Composable
 private fun BibVaultApp() {
     val context = LocalContext.current
+    val activity = context as? ComponentActivity
     val navController = rememberNavController()
     val viewModel: VaultViewModel = viewModel()
     val vaultState by viewModel.vaultState.collectAsState()
     val progress by viewModel.progress.collectAsState()
+    var screenshotProtectionEnabled by rememberSaveable { mutableStateOf(true) }
+
+    LaunchedEffect(activity, screenshotProtectionEnabled) {
+        val window = activity?.window ?: return@LaunchedEffect
+        if (screenshotProtectionEnabled) {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE
+            )
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
 
     // ── File selection state ──
     var selectedFileUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
@@ -307,6 +321,10 @@ private fun BibVaultApp() {
                         } catch (e: android.content.ActivityNotFoundException) {
                             fallbackOpenVaultPicker.launch("*/*")
                         }
+                    },
+                    screenshotProtectionEnabled = screenshotProtectionEnabled,
+                    onToggleScreenshotProtection = { enabled ->
+                        screenshotProtectionEnabled = enabled
                     }
                 )
             }
