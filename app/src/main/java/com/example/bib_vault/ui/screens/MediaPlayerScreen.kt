@@ -358,6 +358,7 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
         onDispose {
             clearWindowBrightnessOverride(activity)
             restoreSystemBarsVisibility(activity)
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
     }
 
@@ -629,6 +630,25 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
             ) {
                 IconButton(
                     onClick = {
+                        if (isLandscape) {
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            isLandscape = false
+                        } else {
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            isLandscape = true
+                        }
+                    },
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                ) {
+                    Icon(
+                        Icons.Default.ScreenRotation,
+                        contentDescription = if (isLandscape) "Switch to Portrait" else "Switch to Landscape",
+                        tint = Color.White
+                    )
+                }
+
+                IconButton(
+                    onClick = {
                         seekButtonStepDraftSec = seekButtonStepSec.toFloat()
                         showSeekSettings = true
                     },
@@ -674,24 +694,6 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                             valueRange = 1f..30f,
                             steps = 28
                         )
-                        OutlinedButton(
-                            onClick = {
-                                if (isLandscape) {
-                                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                                    isLandscape = false
-                                } else {
-                                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                                    isLandscape = true
-                                }
-                            }
-                        ) {
-                            Icon(
-                                Icons.Default.ScreenRotation,
-                                contentDescription = null
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (isLandscape) "Switch to Portrait" else "Switch to Landscape")
-                        }
                     }
                 },
                 confirmButton = {
