@@ -54,15 +54,15 @@ fun VaultBrowserScreen(
     onFileClick: (VaultEntry) -> Unit,
     onDeleteFile: (VaultEntry) -> Unit,
     onAddFiles: () -> Unit,
-    previewsEnabled: Boolean,
     onLoadPreviewBytes: suspend (VaultEntry) -> ByteArray?,
     onLock: () -> Unit
 ) {
-    var selectedFilter by remember { mutableStateOf(FilterType.ALL) }
+    var selectedFilter by rememberSaveable { mutableStateOf(FilterType.ALL) }
     var showDeleteDialog by remember { mutableStateOf<VaultEntry?>(null) }
     var showSettingsDialog by remember { mutableStateOf(false) }
-    var showListView by rememberSaveable { mutableStateOf(false) }
-    var listNamesOnly by rememberSaveable { mutableStateOf(false) }
+    var showListView by rememberSaveable { mutableStateOf(true) }
+    var listNamesOnly by rememberSaveable { mutableStateOf(true) }
+    var previewsEnabled by rememberSaveable { mutableStateOf(true) }
     val previewCache = remember { mutableStateMapOf<String, Bitmap?>() }
 
     LaunchedEffect(entries, previewsEnabled) {
@@ -270,6 +270,17 @@ fun VaultBrowserScreen(
                         Switch(
                             checked = showListView,
                             onCheckedChange = { showListView = it }
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Show media preview")
+                        Switch(
+                            checked = previewsEnabled,
+                            onCheckedChange = { previewsEnabled = it }
                         )
                     }
                     Row(

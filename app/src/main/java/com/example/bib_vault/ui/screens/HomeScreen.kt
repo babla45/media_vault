@@ -36,9 +36,7 @@ fun HomeScreen(
     onCreateVault: () -> Unit,
     onOpenVault: () -> Unit,
     screenshotProtectionEnabled: Boolean,
-    onToggleScreenshotProtection: (Boolean) -> Unit,
-    mediaPreviewsEnabled: Boolean,
-    onToggleMediaPreviews: (Boolean) -> Unit
+    onToggleScreenshotProtection: (Boolean) -> Unit
 ) {
     var showSettingsDialog by remember { mutableStateOf(false) }
 
@@ -176,29 +174,16 @@ fun HomeScreen(
             onDismissRequest = { showSettingsDialog = false },
             title = { Text("Settings") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Screenshot protection")
-                        Switch(
-                            checked = screenshotProtectionEnabled,
-                            onCheckedChange = onToggleScreenshotProtection
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Media previews")
-                        Switch(
-                            checked = mediaPreviewsEnabled,
-                            onCheckedChange = onToggleMediaPreviews
-                        )
-                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Screenshot protection")
+                    Switch(
+                        checked = screenshotProtectionEnabled,
+                        onCheckedChange = onToggleScreenshotProtection
+                    )
                 }
             },
             confirmButton = {
