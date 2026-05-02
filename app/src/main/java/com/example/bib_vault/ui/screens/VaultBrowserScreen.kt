@@ -87,6 +87,8 @@ fun VaultBrowserScreen(
     val previewCache = remember { mutableStateMapOf<String, Bitmap?>() }
     val selectedIds = remember { mutableStateListOf<String>() }
     val isSelectionMode = selectedIds.isNotEmpty()
+    var rangeSelectEnabled by rememberSaveable { mutableStateOf(false) }
+    var rangeAnchorId by remember { mutableStateOf<String?>(null) }
     val namesOnlyListState = rememberLazyListState()
 
     LaunchedEffect(selectedFilter, showListView, listNamesOnly, previewsEnabled) {
@@ -137,6 +139,56 @@ fun VaultBrowserScreen(
         }
     }
 
+    fun selectRangeTo(targetId: String) {
+        val anchorId = rangeAnchorId ?: return
+        val start = filteredEntries.indexOfFirst { it.id == anchorId }
+        val end = filteredEntries.indexOfFirst { it.id == targetId }
+        if (start < 0 || end < 0) return
+        val from = minOf(start, end)
+        val to = maxOf(start, end)
+        for (i in from..to) {
+            val id = filteredEntries[i].id
+            if (!selectedIds.contains(id)) selectedIds.add(id)
+        }
+    }
+
+    fun onItemTap(entry: VaultEntry) {
+        if (!isSelectionMode) {
+            onFileClick(entry)
+            return
+        }
+        if (rangeSelectEnabled && rangeAnchorId != null) {
+            selectRangeTo(entry.id)
+            rangeSelectEnabled = false
+            return
+        }
+        if (selectedIds.contains(entry.id)) {
+            selectedIds.remove(entry.id)
+        } else {
+            selectedIds.add(entry.id)
+        }
+        if (selectedIds.size == 1) {
+            rangeAnchorId = selectedIds.firstOrNull()
+        } else if (selectedIds.isEmpty()) {
+            rangeAnchorId = null
+            rangeSelectEnabled = false
+        }
+    }
+
+    fun onItemLongPress(entry: VaultEntry) {
+        if (selectedIds.contains(entry.id)) {
+            selectedIds.remove(entry.id)
+        } else {
+            selectedIds.add(entry.id)
+        }
+        if (selectedIds.size == 1) {
+            rangeAnchorId = selectedIds.firstOrNull()
+        } else if (selectedIds.isEmpty()) {
+            rangeAnchorId = null
+            rangeSelectEnabled = false
+        }
+    }
+
     // Counts for filter badges
     val videosCount = remember(entries) { entries.count { it.isVideo } }
     val audiosCount = remember(entries) { entries.count { it.isAudio } }
@@ -179,13 +231,33 @@ fun VaultBrowserScreen(
                                 tint = VaultPrimaryLight
                             )
                         }
+                        if (selectedIds.size >= 1) {
+                            IconButton(
+                                onClick = {
+                                    rangeSelectEnabled = !rangeSelectEnabled
+                                    if (rangeSelectEnabled && rangeAnchorId == null) {
+                                        rangeAnchorId = selectedIds.firstOrNull()
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.DoneAll,
+                                    if (rangeSelectEnabled) "Range select enabled" else "Enable range select",
+                                    tint = if (rangeSelectEnabled) VaultPrimaryLight else VaultOnSurfaceVariant
+                                )
+                            }
+                        }
                         IconButton(onClick = { showRestoreDialog = true }) {
                             Icon(Icons.Default.Restore, "Restore selected", tint = VaultPrimaryLight)
                         }
                         IconButton(onClick = { showDeleteDialog = true }) {
                             Icon(Icons.Default.Delete, "Delete selected", tint = VaultError)
                         }
-                        IconButton(onClick = { selectedIds.clear() }) {
+                        IconButton(onClick = {
+                            selectedIds.clear()
+                            rangeSelectEnabled = false
+                            rangeAnchorId = null
+                        }) {
                             Icon(Icons.Default.Close, "Cancel selection", tint = VaultOnSurfaceVariant)
                         }
                     } else {
@@ -266,8 +338,8 @@ fun VaultBrowserScreen(
                             state = namesOnlyListState,
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
-                            modifier = Modifier.pointerInput(filteredEntries, isSelectionMode) {
-                                if (!isSelectionMode || filteredEntries.isEmpty()) return@pointerInput
+                            modifier = Modifier.pointerInput(filteredEntries) {
+                                if (filteredEntries.isEmpty()) return@pointerInput
                                 var anchorIndex = -1
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { offset ->
@@ -305,18 +377,8 @@ fun VaultBrowserScreen(
                                     index = index + 1,
                                     entry = entry,
                                     isSelected = selectedIds.contains(entry.id),
-                                    onClick = {
-                                        if (isSelectionMode) {
-                                            if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
-                                            else selectedIds.add(entry.id)
-                                        } else {
-                                            onFileClick(entry)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
-                                        else selectedIds.add(entry.id)
-                                    }
+                                    onClick = { onItemTap(entry) },
+                                    onLongClick = { onItemLongPress(entry) }
                                 )
                             }
                         }
@@ -332,18 +394,8 @@ fun VaultBrowserScreen(
                                     previewBitmap = previewCache[entry.id],
                                     useListLayout = true,
                                     isSelected = selectedIds.contains(entry.id),
-                                    onClick = {
-                                        if (isSelectionMode) {
-                                            if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
-                                            else selectedIds.add(entry.id)
-                                        } else {
-                                            onFileClick(entry)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
-                                        else selectedIds.add(entry.id)
-                                    }
+                                    onClick = { onItemTap(entry) },
+                                    onLongClick = { onItemLongPress(entry) }
                                 )
                             }
                         }
@@ -362,18 +414,8 @@ fun VaultBrowserScreen(
                                 previewBitmap = previewCache[entry.id],
                                 useListLayout = false,
                                 isSelected = selectedIds.contains(entry.id),
-                                onClick = {
-                                    if (isSelectionMode) {
-                                        if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
-                                        else selectedIds.add(entry.id)
-                                    } else {
-                                        onFileClick(entry)
-                                    }
-                                },
-                                onLongClick = {
-                                    if (selectedIds.contains(entry.id)) selectedIds.remove(entry.id)
-                                    else selectedIds.add(entry.id)
-                                }
+                                onClick = { onItemTap(entry) },
+                                onLongClick = { onItemLongPress(entry) }
                             )
                         }
                     }
@@ -468,6 +510,8 @@ fun VaultBrowserScreen(
                     onClick = {
                         onDeleteFiles(selectedEntries)
                         selectedIds.clear()
+                        rangeSelectEnabled = false
+                        rangeAnchorId = null
                         showDeleteDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = VaultError)
@@ -500,6 +544,8 @@ fun VaultBrowserScreen(
                     onClick = {
                         onRestoreFiles(selectedEntries)
                         selectedIds.clear()
+                        rangeSelectEnabled = false
+                        rangeAnchorId = null
                         showRestoreDialog = false
                     }
                 ) {
