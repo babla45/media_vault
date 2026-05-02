@@ -615,8 +615,8 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
 
             Surface(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 72.dp),
+                    .align(Alignment.BottomStart)
+                    .padding(start = 14.dp, bottom = 112.dp),
                 color = Color.Black.copy(alpha = 0.5f),
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -625,8 +625,8 @@ private fun VideoPlayerWithGestureControls(exoPlayer: ExoPlayer) {
                         if (durationMs > 0) FormatUtils.formatDuration(durationMs) else "--:--"
                     }",
                     color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
             }
 

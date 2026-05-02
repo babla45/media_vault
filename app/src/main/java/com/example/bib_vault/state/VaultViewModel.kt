@@ -162,16 +162,20 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _vaultState.value = VaultState.Loading("Removing file...")
+                _progress.value = VaultProgress(message = "Removing file 1 of 1...")
 
                 VaultManager.removeFile(
                     context = getApplication(),
                     vaultUri = currentState.vaultUri,
                     password = password,
-                    entryId = entryId
+                    entryId = entryId,
+                    onProgress = null
                 )
 
+                _progress.value = VaultProgress()
                 openVaultInternal(currentState.vaultUri, password)
             } catch (e: Exception) {
+                _progress.value = VaultProgress()
                 _vaultState.value = VaultState.Error("Failed to remove file: ${e.message}")
             }
         }
@@ -187,16 +191,22 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _vaultState.value = VaultState.Loading("Removing files...")
-                entryIds.forEach { id ->
+                _progress.value = VaultProgress(message = "Starting...")
+                entryIds.forEachIndexed { index, id ->
+                    _progress.value = VaultProgress(index, entryIds.size, "Removing file ${index + 1} of ${entryIds.size}...")
                     VaultManager.removeFile(
                         context = getApplication(),
                         vaultUri = currentState.vaultUri,
                         password = password,
-                        entryId = id
+                        entryId = id,
+                        onProgress = null
                     )
+                    _progress.value = VaultProgress(index + 1, entryIds.size, "Removing file ${index + 1} of ${entryIds.size}...")
                 }
+                _progress.value = VaultProgress()
                 openVaultInternal(currentState.vaultUri, password)
             } catch (e: Exception) {
+                _progress.value = VaultProgress()
                 _vaultState.value = VaultState.Error("Failed to remove files: ${e.message}")
             }
         }

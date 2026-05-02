@@ -34,6 +34,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import com.example.bib_vault.ui.theme.*
@@ -62,6 +63,8 @@ fun VaultBrowserScreen(
     onRestoreFiles: (List<VaultEntry>) -> Unit,
     onAddFiles: () -> Unit,
     onLoadPreviewBytes: suspend (VaultEntry) -> ByteArray?,
+    screenshotProtectionEnabled: Boolean,
+    onUpdateScreenshotProtection: (Boolean, String?) -> Boolean,
     onLock: () -> Unit
 ) {
     val maxPreviewBytes = 25L * 1024L * 1024L
@@ -84,6 +87,9 @@ fun VaultBrowserScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showScreenshotPasswordDialog by remember { mutableStateOf(false) }
+    var screenshotPassword by remember { mutableStateOf("") }
+    var screenshotPasswordError by remember { mutableStateOf<String?>(null) }
     var showListView by rememberSaveable { mutableStateOf(savedShowListView) }
     var listNamesOnly by rememberSaveable { mutableStateOf(savedListNamesOnly) }
     var previewsEnabled by rememberSaveable { mutableStateOf(savedPreviewsEnabled) }
@@ -474,6 +480,26 @@ fun VaultBrowserScreen(
                             onCheckedChange = { listNamesOnly = it }
                         )
                     }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Screenshot protection")
+                        Switch(
+                            checked = screenshotProtectionEnabled,
+                            onCheckedChange = { enabled ->
+                                if (enabled) {
+                                    if (onUpdateScreenshotProtection(true, null)) {
+                                        screenshotPassword = ""
+                                        screenshotPasswordError = null
+                                    }
+                                } else {
+                                    showScreenshotPasswordDialog = true
+                                }
+                            }
+                        )
+                    }
                     Text(
                         text = if (showListView) "Showing files in list" else "Showing files in grid (2 per row)",
                         style = MaterialTheme.typography.bodySmall,
@@ -496,6 +522,73 @@ fun VaultBrowserScreen(
             confirmButton = {
                 TextButton(onClick = { showSettingsDialog = false }) {
                     Text("Done")
+                }
+            }
+        )
+    }
+
+    if (showScreenshotPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showScreenshotPasswordDialog = false
+                screenshotPassword = ""
+                screenshotPasswordError = null
+            },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = VaultSurface,
+            title = { Text("Disable Screenshot Protection") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Enter vault password to disable screenshot protection.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OutlinedTextField(
+                        value = screenshotPassword,
+                        onValueChange = {
+                            screenshotPassword = it
+                            screenshotPasswordError = null
+                        },
+                        label = { Text("Vault password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        isError = screenshotPasswordError != null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (screenshotPasswordError != null) {
+                        Text(
+                            screenshotPasswordError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = VaultError
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val success = onUpdateScreenshotProtection(false, screenshotPassword)
+                        if (success) {
+                            showScreenshotPasswordDialog = false
+                            screenshotPassword = ""
+                            screenshotPasswordError = null
+                        } else {
+                            screenshotPasswordError = "Wrong vault password"
+                        }
+                    }
+                ) {
+                    Text("Disable")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showScreenshotPasswordDialog = false
+                        screenshotPassword = ""
+                        screenshotPasswordError = null
+                    }
+                ) {
+                    Text("Cancel")
                 }
             }
         )

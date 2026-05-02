@@ -11,10 +11,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -327,10 +329,6 @@ private fun BibVaultApp() {
                         } catch (e: android.content.ActivityNotFoundException) {
                             fallbackOpenVaultPicker.launch("*/*")
                         }
-                    },
-                    screenshotProtectionEnabled = screenshotProtectionEnabled,
-                    onToggleScreenshotProtection = { enabled ->
-                        screenshotProtectionEnabled = enabled
                     }
                 )
             }
@@ -387,6 +385,20 @@ private fun BibVaultApp() {
                             onLoadPreviewBytes = { entry ->
                                 viewModel.decryptImageBytes(entry)
                             },
+                            screenshotProtectionEnabled = screenshotProtectionEnabled,
+                            onUpdateScreenshotProtection = { enabled, passwordForDisable ->
+                                if (enabled) {
+                                    screenshotProtectionEnabled = true
+                                    true
+                                } else {
+                                    if (!passwordForDisable.isNullOrEmpty() && passwordForDisable == currentPassword) {
+                                        screenshotProtectionEnabled = false
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
+                            },
                             onLock = {
                                 currentPassword = ""
                                 viewModel.lock()
@@ -398,11 +410,28 @@ private fun BibVaultApp() {
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator()
-                            Text(
-                                text = state.message,
-                                modifier = Modifier.align(Alignment.Center).padding(top = 56.dp)
-                            )
+                            androidx.compose.foundation.layout.Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(horizontal = 24.dp)
+                            ) {
+                                CircularProgressIndicator()
+                                Text(
+                                    text = if (progress.message.isNotBlank()) progress.message else state.message,
+                                    modifier = Modifier.padding(top = 16.dp)
+                                )
+                                if (progress.isActive) {
+                                    LinearProgressIndicator(
+                                        progress = { progress.fraction },
+                                        modifier = Modifier
+                                            .padding(top = 12.dp)
+                                            .fillMaxWidth(0.8f)
+                                    )
+                                    Text(
+                                        text = "${progress.currentFile} / ${progress.totalFiles}",
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                     else -> Unit
