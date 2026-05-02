@@ -1,0 +1,112 @@
+Build a secure Android application that can store and play multiple password-protected media files (video, audio, image) from a single encrypted container WITHOUT extracting them to storage.
+
+Core Concept:
+- Create a custom encrypted container format (e.g., .vault)
+- The container can hold multiple media files (mp4, mp3, jpg, png, etc.)
+- User enters password once → can browse and play any file inside
+
+Core Requirements:
+
+1. Container Format:
+   - Single file (e.g., media.vault)
+   - Contains:
+     a) Header (magic bytes + version)
+     b) Salt + encryption metadata
+     c) Encrypted file index (list of files with name, type, offset, size)
+     d) Encrypted file data blocks
+   - Index must allow random access to files without decrypting entire container
+
+2. Encryption:
+   - AES-256 (GCM preferred for integrity)
+   - Password → key using PBKDF2 or Argon2
+   - Each file chunk should be encrypted
+   - Store IV/nonce properly
+
+3. Multi-file Support:
+   - Allow user to:
+     - Select multiple files (video/audio/image)
+     - Encrypt all into one container
+   - Maintain metadata:
+     - filename
+     - type (video/audio/image)
+     - size
+     - offset
+
+4. Streaming Decryption:
+   - DO NOT decrypt entire container
+   - Implement chunk-based reading (e.g., 64KB)
+   - Decrypt only requested portions
+   - Support random seek (important for video)
+
+5. Video/Audio Playback:
+   - Use ExoPlayer
+   - Implement custom DataSource:
+     - Reads from encrypted container
+     - Uses file offset from index
+     - Decrypts stream on-the-fly
+     - Supports seek()
+
+6. Image Viewing:
+   - Decrypt only required bytes
+   - Display using Bitmap decoding
+   - No temp file storage
+
+7. UI:
+   - Create Vault
+   - Open Vault (ask password)
+   - Show file list (like gallery)
+   - Click:
+     - Video → play
+     - Audio → play
+     - Image → view
+
+8. Security:
+   - Do not store password
+   - Use secure random salt + IV
+   - Enable FLAG_SECURE (block screenshots)
+   - Handle wrong password gracefully
+   - Optional: auto-lock after inactivity
+
+9. Architecture:
+   - CryptoManager (key derivation + AES)
+   - VaultManager (read/write container)
+   - FileIndexParser
+   - SecureDataSource (for ExoPlayer)
+   - MediaViewerActivity
+
+10. Bonus Features:
+   - Add file integrity check (GCM tag or HMAC)
+   - Support adding/removing files from vault
+   - Thumbnail generation (optional, decrypted in memory)
+   - Sorting/filtering by media type
+
+11. Performance:
+   - Optimize for large videos
+   - Avoid loading full files into memory
+   - Use buffering for smooth playback
+
+Output:
+- Full Android Studio project
+- Kotlin preferred
+- Clean architecture
+- Well-commented code
+- Clear explanation of:
+  - container format
+  - streaming decryption logic
+  - random access implementation
+
+Important Constraints:
+- NEVER write decrypted data to disk
+- MUST support random playback (seek in video)
+- MUST support multiple files inside one container
+- MUST work offline
+
+Start by:
+1. Designing the container format
+2. Implementing CryptoManager
+3. Then VaultManager
+4. Then SecureDataSource
+
+the android studio project is just created 
+using kotlin with empty view activity. 
+Now plan and implement the project
