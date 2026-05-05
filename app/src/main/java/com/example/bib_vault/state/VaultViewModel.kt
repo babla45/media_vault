@@ -180,18 +180,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _vaultState.value = VaultState.Loading("Removing files...")
-                _progress.value = VaultProgress(message = "Starting...")
-                entryIds.forEachIndexed { index, id ->
-                    _progress.value = VaultProgress(index, entryIds.size, "Removing file ${index + 1} of ${entryIds.size}...")
-                    VaultManager.removeFile(
-                        context = getApplication(),
-                        vaultUri = currentState.vaultUri,
-                        password = password,
-                        entryId = id,
-                        onProgress = null
-                    )
-                    _progress.value = VaultProgress(index + 1, entryIds.size, "Removing file ${index + 1} of ${entryIds.size}...")
-                }
+                _progress.value = VaultProgress(message = "Removing files...")
+                VaultManager.removeFiles(
+                    context = getApplication(),
+                    vaultUri = currentState.vaultUri,
+                    password = password,
+                    entryIds = entryIds,
+                    onProgress = { current, total ->
+                        _progress.value = VaultProgress(current, total, "Removing file $current of $total...")
+                    }
+                )
                 _progress.value = VaultProgress()
                 openVaultInternal(currentState.vaultUri, password)
             } catch (e: Exception) {

@@ -457,6 +457,30 @@ object VaultManager {
     }
 
     /**
+     * Remove one or more files from a vault and shrink the container on disk (v2 compacts ciphertext;
+     * v1 rewrites the vault once).
+     */
+    fun removeFiles(
+        context: Context,
+        vaultUri: Uri,
+        password: String,
+        entryIds: Collection<String>,
+        onProgress: ((Int, Int) -> Unit)? = null
+    ) {
+        if (entryIds.isEmpty()) return
+        val (header, existingEntries) = openVault(context, vaultUri, password)
+        val idSet = entryIds.toSet()
+        val keepEntries = existingEntries.filter { it.id !in idSet }
+        if (keepEntries.size == existingEntries.size) return
+
+        if (header.version != CryptoConstants.FORMAT_VERSION_V2) {
+            rewriteVaultV1KeepingEntries(context, vaultUri, password, header, keepEntries, onProgress)
+            return
+        }
+        removeEntriesV2Compact(context, vaultUri, header, password, keepEntries, onProgress)
+    }
+
+    /**
      * Remove a file from an existing vault by its entry ID.
      */
     fun removeFile(
@@ -466,19 +490,91 @@ object VaultManager {
         entryId: String,
         onProgress: ((Int, Int) -> Unit)? = null
     ) {
-        val (header, existingEntries) = openVault(context, vaultUri, password)
-        if (header.version != CryptoConstants.FORMAT_VERSION_V2) {
-            // v1 fallback: rewrite the entire vault (slow but compatible)
-            removeFileV1Rewrite(context, vaultUri, password, entryId, onProgress)
-            return
-        }
+        removeFiles(context, vaultUri, password, listOf(entryId), onProgress)
+    }
 
-        val keepEntries = existingEntries.filter { it.id != entryId }
+    /**
+     * v2: drop removed entries from the index and physically compact ciphertext so file size matches
+     * the sum of remaining payloads (plus fixed header + index).
+     */
+    private fun removeEntriesV2Compact(
+        context: Context,
+        vaultUri: Uri,
+        header: VaultHeader,
+        password: String,
+        keepEntries: List<VaultEntry>,
+        onProgress: ((Int, Int) -> Unit)?
+    ) {
         val key = CryptoManager.deriveKey(password, header.salt)
+        val dataSectionOffset = header.dataSectionOffset
+        val sorted = keepEntries.sortedBy { it.offset }
+        val idToNewOffset = LinkedHashMap<String, Long>(keepEntries.size)
+        var nextOffset = 0L
+        for (e in sorted) {
+            idToNewOffset[e.id] = nextOffset
+            nextOffset += e.encryptedSize
+        }
+        val reindexed = keepEntries.map { it.copy(offset = idToNewOffset[it.id]!!) }
 
-        onProgress?.invoke(keepEntries.size, keepEntries.size)
-        withFileChannelRw(context, vaultUri) { ch ->
-            writeIndexV2InPlace(channel = ch, header = header, key = key, entries = keepEntries)
+        val tempFile = java.io.File.createTempFile("bib_vault_compact_", ".tmp", context.cacheDir)
+        try {
+            withFileChannelRw(context, vaultUri) { ch ->
+                FileOutputStream(tempFile).use { out ->
+                    sorted.forEachIndexed { index, entry ->
+                        onProgress?.invoke(index + 1, sorted.size.coerceAtLeast(1))
+                        copyChannelRangeToOutputStream(
+                            src = ch,
+                            srcStart = dataSectionOffset + entry.offset,
+                            length = entry.encryptedSize,
+                            dest = out
+                        )
+                    }
+                }
+            }
+
+            withFileChannelRw(context, vaultUri) { ch ->
+                writeIndexV2InPlace(channel = ch, header = header, key = key, entries = reindexed)
+                ch.position(dataSectionOffset)
+                FileInputStream(tempFile).use { ins ->
+                    val buf = ByteArray(1024 * 1024)
+                    while (true) {
+                        val r = ins.read(buf)
+                        if (r <= 0) break
+                        val bb = ByteBuffer.wrap(buf, 0, r)
+                        while (bb.hasRemaining()) {
+                            ch.write(bb)
+                        }
+                    }
+                }
+                ch.truncate(dataSectionOffset + tempFile.length())
+                ch.force(true)
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    private fun copyChannelRangeToOutputStream(
+        src: java.nio.channels.FileChannel,
+        srcStart: Long,
+        length: Long,
+        dest: java.io.OutputStream
+    ) {
+        if (length == 0L) return
+        src.position(srcStart)
+        var remaining = length
+        val maxBuf = 1024 * 1024
+        while (remaining > 0) {
+            val chunk = minOf(remaining, maxBuf.toLong()).toInt()
+            val bb = ByteBuffer.allocate(chunk)
+            while (bb.hasRemaining()) {
+                val n = src.read(bb)
+                if (n < 0) {
+                    throw IllegalStateException("Unexpected EOF while compacting vault ciphertext")
+                }
+            }
+            dest.write(bb.array(), 0, chunk)
+            remaining -= chunk
         }
     }
 
@@ -715,30 +811,26 @@ object VaultManager {
         }
     }
 
-    private fun removeFileV1Rewrite(
+    /** Full v1 rewrite preserving [keepEntries] (decrypt with old key, re-encrypt with new salt/key). */
+    private fun rewriteVaultV1KeepingEntries(
         context: Context,
         vaultUri: Uri,
         password: String,
-        entryId: String,
+        header: VaultHeader,
+        keepEntries: List<VaultEntry>,
         onProgress: ((Int, Int) -> Unit)?
     ) {
-        // Original v1 implementation: re-create vault without the removed file.
-        // (Kept minimal: delegate through existing public API patterns.)
-        val (header, existingEntries) = openVault(context, vaultUri, password)
         val key = CryptoManager.deriveKey(password, header.salt)
-
-        val keepEntries = existingEntries.filter { it.id != entryId }
-
         val salt = CryptoManager.generateSalt()
         val newKey = CryptoManager.deriveKey(password, salt)
 
         val newEntries = mutableListOf<VaultEntry>()
         var currentOffset = 0L
-        val encryptedDataTempFile = java.io.File.createTempFile("bib_vault_v1_remove_", ".tmp", context.cacheDir)
+        val encryptedDataTempFile = java.io.File.createTempFile("bib_vault_v1_rewrite_", ".tmp", context.cacheDir)
         try {
             FileOutputStream(encryptedDataTempFile).use { encryptedDataOut ->
                 for ((idx, entry) in keepEntries.withIndex()) {
-                    onProgress?.invoke(idx + 1, keepEntries.size)
+                    onProgress?.invoke(idx + 1, keepEntries.size.coerceAtLeast(1))
                     val baseIv = CryptoManager.generateCtrBaseIv()
                     val mac = Mac.getInstance("HmacSHA256").apply { init(newKey) }
                     var chunkIndex = 0L
