@@ -1,9 +1,16 @@
 package com.example.bib_vault.ui.screens
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import android.webkit.WebView
 import androidx.compose.animation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -18,8 +25,11 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import org.commonmark.parser.Parser
+import org.commonmark.renderer.html.HtmlRenderer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -31,7 +41,9 @@ import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,6 +81,100 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
+
+/** Max decrypted size loaded into memory for text / markdown preview. */
+private const val TEXT_PREVIEW_MAX_BYTES = 750_000L
+
+/** Max size for PDF preview (decrypt + temp file on disk). */
+private const val PDF_PREVIEW_MAX_BYTES = 25L * 1024L * 1024L
+
+private val markdownParser: Parser = Parser.builder().build()
+private val markdownHtmlRenderer: HtmlRenderer = HtmlRenderer.builder().build()
+
+private fun markdownToHtml(markdown: String): String {
+    val document = markdownParser.parse(markdown)
+    return markdownHtmlRenderer.render(document)
+}
+
+private fun wrapMarkdownHtml(body: String): String = """
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body { margin:0; padding:12px; background:#1a1a1a; color:#e8e8e8; font-family: sans-serif; font-size:15px; line-height:1.5; }
+pre { background:#2a2a2a; padding:10px; border-radius:8px; overflow:auto; }
+code { background:#2a2a2a; padding:2px 6px; border-radius:4px; font-family: monospace; font-size:0.9em; }
+pre code { background:transparent; padding:0; }
+a { color:#8ab4f8; }
+blockquote { border-left:3px solid #555; margin:8px 0; padding-left:12px; color:#c8c8c8; }
+h1,h2,h3,h4 { color:#fff; margin:0.6em 0 0.3em; }
+table { border-collapse:collapse; width:100%; }
+th,td { border:1px solid #444; padding:6px; }
+th { background:#2a2a2a; }
+img { max-width:100%; height:auto; }
+</style></head><body>$body</body></html>
+""".trimIndent()
+
+private class PdfPreviewHolder(
+    private val file: File,
+    private val pfd: ParcelFileDescriptor,
+    val renderer: PdfRenderer
+) {
+    private var closed = false
+    val pageCount: Int get() = renderer.pageCount
+
+    fun renderPage(pageIndex: Int, targetWidthPx: Int): Bitmap? {
+        if (closed || pageIndex < 0 || pageIndex >= renderer.pageCount || targetWidthPx <= 0) return null
+        renderer.openPage(pageIndex).use { page ->
+            val scale = targetWidthPx.toFloat() / page.width
+            val w = targetWidthPx
+            val h = (page.height * scale).roundToInt().coerceAtLeast(1)
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val matrix = Matrix()
+            matrix.setScale(scale, scale)
+            page.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            return bitmap
+        }
+    }
+
+    fun close() {
+        if (closed) return
+        closed = true
+        try {
+            renderer.close()
+        } catch (_: Exception) {
+        }
+        try {
+            pfd.close()
+        } catch (_: Exception) {
+        }
+        try {
+            file.delete()
+        } catch (_: Exception) {
+        }
+    }
+}
+
+private fun writePdfTempAndOpen(context: Context, bytes: ByteArray): PdfPreviewHolder {
+    val file = File.createTempFile("bib_vault_pdf_", ".pdf", context.cacheDir)
+    FileOutputStream(file).use { it.write(bytes) }
+    val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    val renderer = PdfRenderer(pfd)
+    return PdfPreviewHolder(file, pfd, renderer)
+}
+
+private fun decodeUtf8WithReplacement(bytes: ByteArray): String {
+    val decoder = StandardCharsets.UTF_8.newDecoder()
+        .onMalformedInput(CodingErrorAction.REPLACE)
+        .onUnmappableCharacter(CodingErrorAction.REPLACE)
+    return decoder.decode(ByteBuffer.wrap(bytes)).toString()
+}
 
 fun android.content.Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -177,6 +283,9 @@ fun MediaPlayerScreen(
     val audioEntries = remember(sortedEntries) {
         sortedEntries.filter { MimeUtils.getMediaType(it.mimeType) == MediaType.AUDIO }
     }
+    val otherEntries = remember(sortedEntries) {
+        sortedEntries.filter { MimeUtils.getMediaType(it.mimeType) == MediaType.OTHER }
+    }
     var currentEntryId by remember(entry.id) { mutableStateOf(entry.id) }
     val currentEntry = remember(entry, entries, currentEntryId) {
         entries[currentEntryId] ?: entry
@@ -194,6 +303,7 @@ fun MediaPlayerScreen(
     val mediaPlaylist = when (mediaType) {
         MediaType.VIDEO -> videoEntries
         MediaType.AUDIO -> audioEntries
+        MediaType.OTHER -> otherEntries
         else -> emptyList()
     }
     val currentPlaylistIndex = mediaPlaylist.indexOfFirst { it.id == currentEntry.id }
@@ -306,10 +416,79 @@ fun MediaPlayerScreen(
                     )
                 }
                 MediaType.OTHER -> {
-                    Text(
-                        "Unsupported file type",
-                        color = VaultOnSurfaceVariant
-                    )
+                    when {
+                        MimeUtils.isPdfPreviewable(currentEntry.mimeType, currentEntry.fileName) -> {
+                            PdfVaultFilePreview(
+                                entry = currentEntry,
+                                onDecrypt = onDecryptImage,
+                                canPrev = canPrevMedia,
+                                canNext = canNextMedia,
+                                onPrev = {
+                                    if (canPrevMedia) {
+                                        currentEntryId = mediaPlaylist[currentPlaylistIndex - 1].id
+                                    }
+                                },
+                                onNext = {
+                                    if (canNextMedia) {
+                                        currentEntryId = mediaPlaylist[currentPlaylistIndex + 1].id
+                                    }
+                                }
+                            )
+                        }
+                        MimeUtils.isMarkdownFile(currentEntry.mimeType, currentEntry.fileName) -> {
+                            MarkdownVaultFilePreview(
+                                entry = currentEntry,
+                                onDecrypt = onDecryptImage,
+                                canPrev = canPrevMedia,
+                                canNext = canNextMedia,
+                                onPrev = {
+                                    if (canPrevMedia) {
+                                        currentEntryId = mediaPlaylist[currentPlaylistIndex - 1].id
+                                    }
+                                },
+                                onNext = {
+                                    if (canNextMedia) {
+                                        currentEntryId = mediaPlaylist[currentPlaylistIndex + 1].id
+                                    }
+                                }
+                            )
+                        }
+                        MimeUtils.isTextPreviewable(currentEntry.mimeType, currentEntry.fileName) -> {
+                            TextVaultFilePreview(
+                                entry = currentEntry,
+                                onDecrypt = onDecryptImage,
+                                canPrev = canPrevMedia,
+                                canNext = canNextMedia,
+                                onPrev = {
+                                    if (canPrevMedia) {
+                                        currentEntryId = mediaPlaylist[currentPlaylistIndex - 1].id
+                                    }
+                                },
+                                onNext = {
+                                    if (canNextMedia) {
+                                        currentEntryId = mediaPlaylist[currentPlaylistIndex + 1].id
+                                    }
+                                }
+                            )
+                        }
+                        else -> {
+                            OtherVaultFileView(
+                                entry = currentEntry,
+                                canPrev = canPrevMedia,
+                                canNext = canNextMedia,
+                                onPrev = {
+                                    if (canPrevMedia) {
+                                        currentEntryId = mediaPlaylist[currentPlaylistIndex - 1].id
+                                    }
+                                },
+                                onNext = {
+                                    if (canNextMedia) {
+                                        currentEntryId = mediaPlaylist[currentPlaylistIndex + 1].id
+                                    }
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1126,6 +1305,521 @@ private fun AudioPlayerUI(
                     tint = VaultOnSurface,
                     modifier = Modifier.size(36.dp)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PdfVaultFilePreview(
+    entry: VaultEntry,
+    onDecrypt: suspend (VaultEntry) -> ByteArray?,
+    canPrev: Boolean,
+    canNext: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    var pdfHolder by remember { mutableStateOf<PdfPreviewHolder?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var pageIndex by remember { mutableIntStateOf(0) }
+    var pageBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    val holderToDispose = rememberUpdatedState(pdfHolder)
+
+    LaunchedEffect(entry.id) {
+        pdfHolder?.close()
+        pdfHolder = null
+        pageBitmap = null
+        pageIndex = 0
+        isLoading = true
+        error = null
+        if (entry.originalSize > PDF_PREVIEW_MAX_BYTES) {
+            isLoading = false
+            error =
+                "Preview is limited to ${FormatUtils.formatFileSize(PDF_PREVIEW_MAX_BYTES)}. Restore the file to view the full document."
+            return@LaunchedEffect
+        }
+        try {
+            val bytes = withContext(Dispatchers.IO) {
+                onDecrypt(entry)
+            }
+            if (bytes == null) {
+                error = "Could not decrypt file"
+            } else {
+                val newHolder = withContext(Dispatchers.IO) {
+                    writePdfTempAndOpen(context.applicationContext, bytes)
+                }
+                if (newHolder.pageCount <= 0) {
+                    newHolder.close()
+                    error = "Could not read PDF pages"
+                } else {
+                    pdfHolder = newHolder
+                }
+            }
+        } catch (e: Exception) {
+            pdfHolder?.close()
+            pdfHolder = null
+            error = e.message?.takeIf { it.isNotBlank() } ?: "Could not open PDF"
+        }
+        isLoading = false
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            holderToDispose.value?.close()
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        when {
+            isLoading -> {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = VaultPrimary)
+                }
+            }
+            error != null -> {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = error!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = VaultError
+                    )
+                }
+            }
+            pdfHolder != null -> {
+                val holder = pdfHolder!!
+                val pageCount = holder.pageCount
+                val pdfScroll = rememberScrollState()
+                LaunchedEffect(pageIndex) {
+                    pdfScroll.scrollTo(0)
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    BoxWithConstraints(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                    ) {
+                        val widthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
+                        LaunchedEffect(holder, pageIndex, widthPx) {
+                            pageBitmap = withContext(Dispatchers.Default) {
+                                holder.renderPage(pageIndex, widthPx)?.asImageBitmap()
+                            }
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(pdfScroll)
+                        ) {
+                            val bm = pageBitmap
+                            if (bm != null) {
+                                Image(
+                                    bitmap = bm,
+                                    contentDescription = "PDF page ${pageIndex + 1}",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentScale = ContentScale.FillWidth
+                                )
+                            }
+                        }
+                    }
+                    if (pageCount > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp, bottom = 4.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { if (pageIndex > 0) pageIndex-- },
+                                enabled = pageIndex > 0
+                            ) {
+                                Icon(
+                                    Icons.Default.ChevronLeft,
+                                    "Previous page",
+                                    tint = Color.White
+                                )
+                            }
+                            Text(
+                                text = "${pageIndex + 1} / $pageCount",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White
+                            )
+                            IconButton(
+                                onClick = { if (pageIndex < pageCount - 1) pageIndex++ },
+                                enabled = pageIndex < pageCount - 1
+                            ) {
+                                Icon(
+                                    Icons.Default.ChevronRight,
+                                    "Next page",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (canPrev || canNext) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onPrev, enabled = canPrev) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        "Previous file",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                IconButton(onClick = onNext, enabled = canNext) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        "Next file",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownVaultFilePreview(
+    entry: VaultEntry,
+    onDecrypt: suspend (VaultEntry) -> ByteArray?,
+    canPrev: Boolean,
+    canNext: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit
+) {
+    var docHtml by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(entry.id) {
+        isLoading = true
+        error = null
+        docHtml = null
+        if (entry.originalSize > TEXT_PREVIEW_MAX_BYTES) {
+            isLoading = false
+            error =
+                "Preview is limited to ${FormatUtils.formatFileSize(TEXT_PREVIEW_MAX_BYTES)}. Restore the file to view the full document."
+            return@LaunchedEffect
+        }
+        try {
+            val bytes = withContext(Dispatchers.IO) {
+                onDecrypt(entry)
+            }
+            if (bytes == null) {
+                error = "Could not decrypt file"
+            } else {
+                val md = decodeUtf8WithReplacement(bytes)
+                docHtml = withContext(Dispatchers.Default) {
+                    wrapMarkdownHtml(markdownToHtml(md))
+                }
+            }
+        } catch (e: Exception) {
+            error = e.message?.takeIf { it.isNotBlank() } ?: "Error loading file"
+        }
+        isLoading = false
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        when {
+            isLoading -> {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = VaultPrimary)
+                }
+            }
+            error != null -> {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = error!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = VaultError
+                    )
+                }
+            }
+            docHtml != null -> {
+                key(docHtml!!) {
+                    AndroidView(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp),
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                settings.javaScriptEnabled = false
+                            }
+                        },
+                        update = { wv ->
+                            wv.loadDataWithBaseURL(null, docHtml!!, "text/html", "UTF-8", null)
+                        }
+                    )
+                }
+            }
+        }
+        if (canPrev || canNext) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onPrev, enabled = canPrev) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        "Previous file",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                IconButton(onClick = onNext, enabled = canNext) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        "Next file",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Scrollable UTF-8 text preview for text-like vault entries (decrypted in memory only).
+ */
+@Composable
+private fun TextVaultFilePreview(
+    entry: VaultEntry,
+    onDecrypt: suspend (VaultEntry) -> ByteArray?,
+    canPrev: Boolean,
+    canNext: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit
+) {
+    var textContent by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(entry.id) {
+        isLoading = true
+        error = null
+        textContent = null
+        if (entry.originalSize > TEXT_PREVIEW_MAX_BYTES) {
+            isLoading = false
+            error =
+                "Preview is limited to ${FormatUtils.formatFileSize(TEXT_PREVIEW_MAX_BYTES)}. Restore the file to view the full contents."
+            return@LaunchedEffect
+        }
+        try {
+            val bytes = withContext(Dispatchers.IO) {
+                onDecrypt(entry)
+            }
+            if (bytes == null) {
+                error = "Could not decrypt file"
+            } else {
+                textContent = decodeUtf8WithReplacement(bytes)
+            }
+        } catch (e: Exception) {
+            error = e.message?.takeIf { it.isNotBlank() } ?: "Error loading file"
+        }
+        isLoading = false
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        when {
+            isLoading -> {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = VaultPrimary)
+                }
+            }
+            error != null -> {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = error!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = VaultError
+                    )
+                }
+            }
+            textContent != null -> {
+                val scroll = rememberScrollState()
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.White.copy(alpha = 0.08f)
+                ) {
+                    Text(
+                        text = textContent!!,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            color = Color.White.copy(alpha = 0.92f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scroll)
+                            .padding(16.dp)
+                    )
+                }
+            }
+        }
+        if (canPrev || canNext) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onPrev, enabled = canPrev) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        "Previous file",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                IconButton(onClick = onNext, enabled = canNext) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        "Next file",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Vault entry that is not image/video/audio and is not text-previewable: no in-app preview.
+ */
+@Composable
+private fun OtherVaultFileView(
+    entry: VaultEntry,
+    canPrev: Boolean,
+    canNext: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            Icons.Default.InsertDriveFile,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.size(96.dp)
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = entry.fileName,
+            style = MaterialTheme.typography.titleLarge,
+            color = Color.White,
+            fontWeight = FontWeight.Medium,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "${MimeUtils.getTypeLabel(entry.mimeType)} • ${FormatUtils.formatFileSize(entry.originalSize)}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.65f)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Preview is not available. Restore this file from the vault browser to open it with another app.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.55f)
+        )
+        if (canPrev || canNext) {
+            Spacer(modifier = Modifier.height(32.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onPrev, enabled = canPrev) {
+                    Icon(
+                        Icons.Default.SkipPrevious,
+                        "Previous file",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+                IconButton(onClick = onNext, enabled = canNext) {
+                    Icon(
+                        Icons.Default.SkipNext,
+                        "Next file",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
             }
         }
     }

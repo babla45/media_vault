@@ -363,7 +363,7 @@ private fun BibVaultApp() {
                     isProcessing = vaultState is VaultState.Loading,
                     onAddFiles = {
                         try {
-                            createFilePicker.launch(arrayOf("video/*", "audio/*", "image/*"))
+                            createFilePicker.launch(arrayOf("*/*"))
                         } catch (e: android.content.ActivityNotFoundException) {
                             fallbackCreateFilePicker.launch("*/*")
                         }
@@ -402,7 +402,7 @@ private fun BibVaultApp() {
                         },
                             onAddFiles = {
                                 try {
-                                    addFilePicker.launch(arrayOf("video/*", "audio/*", "image/*"))
+                                    addFilePicker.launch(arrayOf("*/*"))
                                 } catch (e: android.content.ActivityNotFoundException) {
                                     fallbackAddFilePicker.launch("*/*")
                                 }

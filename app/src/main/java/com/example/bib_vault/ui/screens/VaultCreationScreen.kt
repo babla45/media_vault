@@ -161,7 +161,7 @@ fun VaultCreationScreen(
                             color = VaultOnSurfaceVariant.copy(alpha = 0.6f)
                         )
                         Text(
-                            "Tap + to add media files",
+                            "Tap + to add files",
                             style = MaterialTheme.typography.bodyMedium,
                             color = VaultOnSurfaceVariant.copy(alpha = 0.4f)
                         )

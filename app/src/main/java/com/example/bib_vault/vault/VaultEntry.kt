@@ -47,6 +47,9 @@ data class VaultEntry(
     /** Whether this entry is an image file */
     val isImage: Boolean get() = mimeType.startsWith("image/")
 
+    /** Documents, archives, and any type that is not video, audio, or image */
+    val isOther: Boolean get() = !isVideo && !isAudio && !isImage
+
     /** Serialize this entry to a JSON object */
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)

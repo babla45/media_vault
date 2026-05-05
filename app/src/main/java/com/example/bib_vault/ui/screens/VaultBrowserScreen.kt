@@ -155,6 +155,7 @@ fun VaultBrowserScreen(
             FilterType.VIDEO -> entries.filter { it.isVideo }
             FilterType.AUDIO -> entries.filter { it.isAudio }
             FilterType.IMAGE -> entries.filter { it.isImage }
+            FilterType.OTHERS -> entries.filter { it.isOther }
         }
     }
 
@@ -212,6 +213,7 @@ fun VaultBrowserScreen(
     val videosCount = remember(entries) { entries.count { it.isVideo } }
     val audiosCount = remember(entries) { entries.count { it.isAudio } }
     val imagesCount = remember(entries) { entries.count { it.isImage } }
+    val othersCount = remember(entries) { entries.count { it.isOther } }
 
     Scaffold(
         topBar = {
@@ -321,6 +323,9 @@ fun VaultBrowserScreen(
                 FilterTab("Image", imagesCount, selectedFilter == FilterType.IMAGE) {
                     selectedFilter = FilterType.IMAGE
                 }
+                FilterTab("Others", othersCount, selectedFilter == FilterType.OTHERS) {
+                    selectedFilter = FilterType.OTHERS
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -342,8 +347,11 @@ fun VaultBrowserScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = if (selectedFilter == FilterType.ALL) "No files in vault"
-                            else "No ${selectedFilter.name.lowercase()} files",
+                            text = when (selectedFilter) {
+                                FilterType.ALL -> "No files in vault"
+                                FilterType.OTHERS -> "No other files in vault"
+                                else -> "No ${selectedFilter.name.lowercase()} files"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             color = VaultOnSurfaceVariant.copy(alpha = 0.5f)
                         )
@@ -900,7 +908,7 @@ private fun FilterTab(
     )
 }
 
-private enum class FilterType { ALL, VIDEO, AUDIO, IMAGE }
+private enum class FilterType { ALL, VIDEO, AUDIO, IMAGE, OTHERS }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

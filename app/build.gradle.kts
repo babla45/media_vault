@@ -65,6 +65,8 @@ dependencies {
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.datasource)
 
+    implementation(libs.commonmark)
+
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
