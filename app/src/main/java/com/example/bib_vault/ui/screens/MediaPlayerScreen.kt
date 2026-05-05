@@ -174,6 +174,9 @@ fun MediaPlayerScreen(
             type == MediaType.VIDEO
         }
     }
+    val audioEntries = remember(sortedEntries) {
+        sortedEntries.filter { MimeUtils.getMediaType(it.mimeType) == MediaType.AUDIO }
+    }
     var currentEntryId by remember(entry.id) { mutableStateOf(entry.id) }
     val currentEntry = remember(entry, entries, currentEntryId) {
         entries[currentEntryId] ?: entry
@@ -188,13 +191,14 @@ fun MediaPlayerScreen(
     }
     val canSwipePrev = currentImageIndex > 0
     val canSwipeNext = currentImageIndex >= 0 && currentImageIndex < imageEntries.lastIndex
-    val currentMediaIndex = if (mediaType == MediaType.VIDEO) {
-        videoEntries.indexOfFirst { it.id == currentEntry.id }
-    } else {
-        -1
+    val mediaPlaylist = when (mediaType) {
+        MediaType.VIDEO -> videoEntries
+        MediaType.AUDIO -> audioEntries
+        else -> emptyList()
     }
-    val canPrevMedia = currentMediaIndex > 0
-    val canNextMedia = currentMediaIndex >= 0 && currentMediaIndex < videoEntries.lastIndex
+    val currentPlaylistIndex = mediaPlaylist.indexOfFirst { it.id == currentEntry.id }
+    val canPrevMedia = currentPlaylistIndex > 0
+    val canNextMedia = currentPlaylistIndex >= 0 && currentPlaylistIndex < mediaPlaylist.lastIndex
     val isImage = mediaType == MediaType.IMAGE
     var imageChromeVisible by rememberSaveable { mutableStateOf(true) }
 
@@ -269,12 +273,12 @@ fun MediaPlayerScreen(
                         canNextMedia = canNextMedia,
                         onPrevMedia = {
                             if (canPrevMedia) {
-                                currentEntryId = videoEntries[currentMediaIndex - 1].id
+                                currentEntryId = mediaPlaylist[currentPlaylistIndex - 1].id
                             }
                         },
                         onNextMedia = {
                             if (canNextMedia) {
-                                currentEntryId = videoEntries[currentMediaIndex + 1].id
+                                currentEntryId = mediaPlaylist[currentPlaylistIndex + 1].id
                             }
                         }
                     )
@@ -361,7 +365,14 @@ private fun EncryptedMediaPlayer(
 
     if (isAudioOnly) {
         // Audio-only UI with playback controls
-        AudioPlayerUI(entry = entry, player = exoPlayer)
+        AudioPlayerUI(
+            entry = entry,
+            player = exoPlayer,
+            canPrevTrack = canPrevMedia,
+            canNextTrack = canNextMedia,
+            onPrevTrack = onPrevMedia,
+            onNextTrack = onNextMedia
+        )
     } else {
         VideoPlayerWithGestureControls(
             exoPlayer = exoPlayer,
@@ -925,7 +936,11 @@ private fun SeekGestureHudOverlay(
 @Composable
 private fun AudioPlayerUI(
     entry: VaultEntry,
-    player: ExoPlayer
+    player: ExoPlayer,
+    canPrevTrack: Boolean,
+    canNextTrack: Boolean,
+    onPrevTrack: () -> Unit,
+    onNextTrack: () -> Unit
 ) {
     var isPlaying by remember { mutableStateOf(true) }
     var currentPosition by remember { mutableLongStateOf(0L) }
@@ -1040,12 +1055,23 @@ private fun AudioPlayerUI(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Playback controls
+        // Playback controls: previous track, seek -10s, play/pause, +10s, next track
         Row(
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Rewind 10s
+            IconButton(
+                onClick = { if (canPrevTrack) onPrevTrack() },
+                enabled = canPrevTrack
+            ) {
+                Icon(
+                    Icons.Default.SkipPrevious,
+                    "Previous track",
+                    tint = VaultOnSurface,
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+
             IconButton(
                 onClick = { player.seekTo(maxOf(0, player.currentPosition - 10_000)) }
             ) {
@@ -1057,7 +1083,6 @@ private fun AudioPlayerUI(
                 )
             }
 
-            // Play/Pause
             FilledIconButton(
                 onClick = {
                     if (player.isPlaying) player.pause() else player.play()
@@ -1076,13 +1101,28 @@ private fun AudioPlayerUI(
                 )
             }
 
-            // Forward 10s
             IconButton(
-                onClick = { player.seekTo(player.currentPosition + 10_000) }
+                onClick = {
+                    val dur = player.duration
+                    val maxPos = if (dur > 0) dur else Long.MAX_VALUE
+                    player.seekTo((player.currentPosition + 10_000).coerceAtMost(maxPos))
+                }
             ) {
                 Icon(
                     Icons.Default.Forward10,
                     "Forward 10s",
+                    tint = VaultOnSurface,
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+
+            IconButton(
+                onClick = { if (canNextTrack) onNextTrack() },
+                enabled = canNextTrack
+            ) {
+                Icon(
+                    Icons.Default.SkipNext,
+                    "Next track",
                     tint = VaultOnSurface,
                     modifier = Modifier.size(36.dp)
                 )
