@@ -52,7 +52,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         // Security: Block screenshots and screen recording
         window.setFlags(
             WindowManager.LayoutParams.FLAG_SECURE,
@@ -352,7 +351,16 @@ private fun BibVaultApp() {
                         } catch (e: android.content.ActivityNotFoundException) {
                             fallbackOpenVaultPicker.launch("*/*")
                         }
+                    },
+                    onSettings = {
+                        navController.navigate(Routes.SETTINGS)
                     }
+                )
+            }
+
+            composable(Routes.SETTINGS) {
+                com.example.bib_vault.ui.screens.SettingsScreen(
+                    onBack = { navController.popBackStack() }
                 )
             }
 

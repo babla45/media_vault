@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.PROCESS_OUTGOING_CALLS" tools:ignore="Deprecated" />
     <!-- Fallback for API < 33 -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -28,11 +29,32 @@
             android:theme="@style/Theme.Bib_vault"
             android:screenOrientation="unspecified"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
+            
+            <!-- Handle shared media files for encryption -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
+
+        <activity-alias
+            android:name=".LauncherAlias"
+            android:targetActivity=".MainActivity"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity-alias>
 
+        <activity-alias
+            android:name=".BivFileAlias"
+            android:targetActivity=".MainActivity"
+            android:exported="true">
             <!-- Associate .biv files with this app -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -41,19 +63,27 @@
                 <data android:mimeType="application/octet-stream" />
                 <data android:pathPattern=".*\\.biv" />
             </intent-filter>
-
-            <!-- Handle shared files for encryption or opening -->
+            <!-- Handle shared generic files (.biv and others) -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="video/*" />
-                <data android:mimeType="audio/*" />
-                <data android:mimeType="image/*" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="*/*" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+
+        <receiver
+            android:name=".SecretCodeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SECRET_CODE" />
+                <data android:scheme="android_secret_code" android:host="5643" />
+            </intent-filter>
+            <intent-filter android:priority="9999">
+                <action android:name="android.intent.action.NEW_OUTGOING_CALL" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -5,6 +5,7 @@ package com.example.bib_vault.ui.navigation
  */
 object Routes {
     const val HOME = "home"
+    const val SETTINGS = "settings"
     const val CREATE_VAULT = "create_vault"
     const val VAULT_BROWSER = "vault_browser"
     const val MEDIA_PLAYER = "media_player/{entryId}"

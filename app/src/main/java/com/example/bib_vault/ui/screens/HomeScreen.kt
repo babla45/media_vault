@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,7 +33,8 @@ import com.example.bib_vault.ui.theme.*
 @Composable
 fun HomeScreen(
     onCreateVault: () -> Unit,
-    onOpenVault: () -> Unit
+    onOpenVault: () -> Unit,
+    onSettings: () -> Unit
 ) {
 
     Box(
@@ -42,6 +44,21 @@ fun HomeScreen(
     ) {
         // Ambient glow effects in background
         AmbientGlowBackground()
+        
+        // Settings Button
+        IconButton(
+            onClick = onSettings,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(16.dp)
+                .padding(top = 24.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = VaultOnBackground
+            )
+        }
 
         Column(
             modifier = Modifier
