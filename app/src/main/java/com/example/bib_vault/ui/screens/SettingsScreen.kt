@@ -3,8 +3,6 @@ package com.example.bib_vault.ui.screens
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -15,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.example.bib_vault.SecretCodeReceiver
 import com.example.bib_vault.ui.theme.VaultBackground
 import com.example.bib_vault.ui.theme.VaultOnBackground
 
@@ -36,18 +35,6 @@ fun SettingsScreen(onBack: () -> Unit) {
         mutableStateOf(prefs.getBoolean("isIconHidden", false))
     }
     
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            isIconHidden = true
-            prefs.edit().putBoolean("isIconHidden", true).apply()
-            packageManager.setComponentEnabledSetting(launcherAliasName, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
-        } else {
-            android.widget.Toast.makeText(context, "Permission needed to catch dialer code", android.widget.Toast.LENGTH_LONG).show()
-        }
-    }
-
     fun toggleBiv(enabled: Boolean) {
         isBivEnabled = enabled
         prefs.edit().putBoolean("isBivEnabled", enabled).apply()
@@ -58,24 +45,16 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 
     fun toggleIcon(hidden: Boolean) {
-        if (hidden) {
-            val permission = androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.PROCESS_OUTGOING_CALLS)
-            if (permission == PackageManager.PERMISSION_GRANTED) {
-                isIconHidden = true
-                prefs.edit().putBoolean("isIconHidden", true).apply()
-                try {
-                    packageManager.setComponentEnabledSetting(launcherAliasName, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
-                } catch(e: Exception) {}
-            } else {
-                permissionLauncher.launch(android.Manifest.permission.PROCESS_OUTGOING_CALLS)
-            }
+        isIconHidden = hidden
+        prefs.edit().putBoolean("isIconHidden", hidden).apply()
+        val state = if (hidden) {
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED
         } else {
-            isIconHidden = false
-            prefs.edit().putBoolean("isIconHidden", false).apply()
-            try {
-                packageManager.setComponentEnabledSetting(launcherAliasName, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)
-            } catch(e: Exception) {}
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED
         }
+        try {
+            packageManager.setComponentEnabledSetting(launcherAliasName, state, PackageManager.DONT_KILL_APP)
+        } catch (_: Exception) {}
     }
 
     Scaffold(
@@ -121,7 +100,11 @@ fun SettingsScreen(onBack: () -> Unit) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Hide App Icon", style = MaterialTheme.typography.titleMedium, color = VaultOnBackground)
-                    Text("Hide app from launcher. Dial *5643# to open", style = MaterialTheme.typography.bodyMedium, color = VaultOnBackground.copy(alpha = 0.7f))
+                    Text(
+                        "Hide app from launcher. Dial ${SecretCodeReceiver.DIAL_CODE} to open",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = VaultOnBackground.copy(alpha = 0.7f)
+                    )
                 }
                 Switch(checked = isIconHidden, onCheckedChange = { toggleIcon(it) })
             }
