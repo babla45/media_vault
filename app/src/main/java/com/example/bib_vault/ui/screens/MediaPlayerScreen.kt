@@ -1826,7 +1826,7 @@ private fun OtherVaultFileView(
 }
 
 /**
- * Image viewer with pinch-to-zoom and pan.
+ * Image viewer with pinch-to-zoom, pan, and double-tap to reset zoom.
  * Decrypts the image entirely in memory — no temp files.
  */
 @Composable
@@ -1910,7 +1910,11 @@ private fun EncryptedImageViewer(
                                 )
                                 .pointerInput(entry.id) {
                                     detectTapGestures(
-                                        onTap = { onToggleChrome() }
+                                        onTap = { onToggleChrome() },
+                                        onDoubleTap = {
+                                            scale = 1f
+                                            offset = Offset.Zero
+                                        }
                                     )
                                 }
                                 .pointerInput(entry.id, scale, canSwipePrev, canSwipeNext) {
