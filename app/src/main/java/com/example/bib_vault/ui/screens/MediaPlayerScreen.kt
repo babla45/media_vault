@@ -13,7 +13,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
@@ -1826,7 +1825,7 @@ private fun OtherVaultFileView(
 }
 
 /**
- * Image viewer with pinch-to-zoom, pan, and double-tap to reset zoom.
+ * Image viewer with pinch-to-zoom, pan, double-tap to reset zoom, and swipe for prev/next.
  * Decrypts the image entirely in memory — no temp files.
  */
 @Composable
@@ -1849,7 +1848,7 @@ private fun EncryptedImageViewer(
     var offset by remember { mutableStateOf(Offset.Zero) }
     var rotationDeg by remember { mutableFloatStateOf(0f) }
     val swipeThreshold = 90f
-    var horizontalDragAccumulator by remember { mutableFloatStateOf(0f) }
+    val viewConfiguration = LocalViewConfiguration.current
 
     LaunchedEffect(entry.id) {
         isLoading = true
@@ -1858,7 +1857,6 @@ private fun EncryptedImageViewer(
         scale = 1f
         offset = Offset.Zero
         rotationDeg = 0f
-        horizontalDragAccumulator = 0f
         try {
             val bytes = withContext(Dispatchers.IO) {
                 onDecryptImage(entry)
@@ -1895,10 +1893,59 @@ private fun EncryptedImageViewer(
                 }
 
                 if (bitmap != null) {
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(entry.id, scale, canSwipePrev, canSwipeNext) {
+                                if (scale > 1.05f) return@pointerInput
+
+                                val touchSlop = viewConfiguration.touchSlop
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(
+                                        requireUnconsumed = false,
+                                        pass = PointerEventPass.Initial
+                                    )
+                                    var totalX = 0f
+                                    var totalY = 0f
+                                    var pastSlop = false
+                                    var isSwipe = false
+
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        if (event.changes.count { it.pressed } >= 2) break
+
+                                        val change = event.changes.find { it.id == down.id } ?: break
+                                        if (!change.pressed) {
+                                            if (isSwipe && abs(totalX) > abs(totalY)) {
+                                                when {
+                                                    totalX <= -swipeThreshold && canSwipeNext -> onSwipeNext()
+                                                    totalX >= swipeThreshold && canSwipePrev -> onSwipePrev()
+                                                }
+                                            }
+                                            break
+                                        }
+
+                                        val delta = change.positionChange()
+                                        if (delta != Offset.Zero) {
+                                            totalX += delta.x
+                                            totalY += delta.y
+                                            if (!pastSlop && hypot(totalX, totalY) > touchSlop) {
+                                                pastSlop = true
+                                                isSwipe = abs(totalX) > abs(totalY)
+                                                if (!isSwipe) break
+                                            }
+                                            if (isSwipe) {
+                                                change.consume()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                    ) {
                         Image(
                             bitmap = bitmap.asImageBitmap(),
                             contentDescription = entry.fileName,
+                            contentScale = ContentScale.Fit,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer(
@@ -1917,29 +1964,7 @@ private fun EncryptedImageViewer(
                                         }
                                     )
                                 }
-                                .pointerInput(entry.id, scale, canSwipePrev, canSwipeNext) {
-                                    detectHorizontalDragGestures(
-                                        onHorizontalDrag = { change, dragAmount ->
-                                            if (scale <= 1.05f) {
-                                                horizontalDragAccumulator += dragAmount
-                                                change.consume()
-                                            }
-                                        },
-                                        onDragCancel = {
-                                            horizontalDragAccumulator = 0f
-                                        },
-                                        onDragEnd = {
-                                            if (scale <= 1.05f) {
-                                                when {
-                                                    horizontalDragAccumulator >= swipeThreshold && canSwipePrev -> onSwipePrev()
-                                                    horizontalDragAccumulator <= -swipeThreshold && canSwipeNext -> onSwipeNext()
-                                                }
-                                            }
-                                            horizontalDragAccumulator = 0f
-                                        }
-                                    )
-                                }
-                                .pointerInput(Unit) {
+                                .pointerInput(scale) {
                                     detectTransformGestures { _, pan, zoom, _ ->
                                         val newScale = (scale * zoom).coerceIn(1f, 5f)
                                         scale = newScale
@@ -1972,46 +1997,6 @@ private fun EncryptedImageViewer(
                                 Icon(
                                     imageVector = Icons.Default.RotateLeft,
                                     contentDescription = "Rotate image 90 degrees anticlockwise"
-                                )
-                            }
-                        }
-
-                        // Prev/Next overlay buttons (work even if swipe doesn't)
-                        if (showNavButtons && canSwipePrev) {
-                            FilledIconButton(
-                                onClick = onSwipePrev,
-                                modifier = Modifier
-                                    .align(Alignment.CenterStart)
-                                    .padding(start = 14.dp)
-                                    .size(44.dp),
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = Color.Black.copy(alpha = 0.45f),
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Previous image"
-                                )
-                            }
-                        }
-
-                        if (showNavButtons && canSwipeNext) {
-                            FilledIconButton(
-                                onClick = onSwipeNext,
-                                modifier = Modifier
-                                    .align(Alignment.CenterEnd)
-                                    .padding(end = 14.dp)
-                                    .size(44.dp),
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = Color.Black.copy(alpha = 0.45f),
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Next image",
-                                    modifier = Modifier.graphicsLayer(rotationZ = 180f)
                                 )
                             }
                         }
