@@ -41,6 +41,7 @@ import com.example.bib_vault.ui.theme.*
 import com.example.bib_vault.util.FormatUtils
 import com.example.bib_vault.util.MediaType
 import com.example.bib_vault.util.MimeUtils
+import com.example.bib_vault.util.VaultSortOption
 import com.example.bib_vault.vault.VaultEntry
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +52,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Gallery-style vault file browser shown after successful unlock.
- * Supports filtering by media type, grid display, and file actions.
+ * Supports filtering by media type, sorting, grid/list display, and file actions.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,10 +83,18 @@ fun VaultBrowserScreen(
     val savedShowListView = remember { prefs.getBoolean("show_list_view", true) }
     val savedListNamesOnly = remember { prefs.getBoolean("list_names_only", true) }
     val savedPreviewsEnabled = remember { prefs.getBoolean("previews_enabled", true) }
+    val savedSortOrdinal = remember {
+        prefs.getInt("sort_option_ordinal", VaultSortOption.NAME_ASC.ordinal)
+            .coerceIn(0, VaultSortOption.entries.lastIndex)
+    }
 
     var selectedFilter by rememberSaveable {
         mutableStateOf(FilterType.entries[savedFilterOrdinal])
     }
+    var sortOption by rememberSaveable {
+        mutableStateOf(VaultSortOption.entries[savedSortOrdinal])
+    }
+    var showSortMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -105,9 +114,10 @@ fun VaultBrowserScreen(
     var rangeAnchorId by remember { mutableStateOf<String?>(null) }
     val namesOnlyListState = rememberLazyListState()
 
-    LaunchedEffect(selectedFilter, showListView, listNamesOnly, previewsEnabled) {
+    LaunchedEffect(selectedFilter, sortOption, showListView, listNamesOnly, previewsEnabled) {
         prefs.edit()
             .putInt("selected_filter_ordinal", selectedFilter.ordinal)
+            .putInt("sort_option_ordinal", sortOption.ordinal)
             .putBoolean("show_list_view", showListView)
             .putBoolean("list_names_only", listNamesOnly)
             .putBoolean("previews_enabled", previewsEnabled)
@@ -149,14 +159,15 @@ fun VaultBrowserScreen(
         }
     }
 
-    val filteredEntries = remember(entries, selectedFilter) {
-        when (selectedFilter) {
+    val filteredEntries = remember(entries, selectedFilter, sortOption) {
+        val filtered = when (selectedFilter) {
             FilterType.ALL -> entries
             FilterType.VIDEO -> entries.filter { it.isVideo }
             FilterType.AUDIO -> entries.filter { it.isAudio }
             FilterType.IMAGE -> entries.filter { it.isImage }
             FilterType.OTHERS -> entries.filter { it.isOther }
         }
+        sortOption.sort(filtered)
     }
 
     fun selectRangeTo(targetId: String) {
@@ -284,6 +295,49 @@ fun VaultBrowserScreen(
                     } else {
                         IconButton(onClick = onAddFiles) {
                             Icon(Icons.Default.Add, "Add files", tint = VaultPrimaryLight)
+                        }
+                        Box {
+                            IconButton(onClick = { showSortMenu = true }) {
+                                Icon(
+                                    Icons.Default.Sort,
+                                    contentDescription = "Sort files",
+                                    tint = VaultOnSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showSortMenu,
+                                onDismissRequest = { showSortMenu = false }
+                            ) {
+                                VaultSortOption.entries.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                option.label,
+                                                fontWeight = if (option == sortOption) {
+                                                    FontWeight.SemiBold
+                                                } else {
+                                                    FontWeight.Normal
+                                                }
+                                            )
+                                        },
+                                        onClick = {
+                                            sortOption = option
+                                            showSortMenu = false
+                                        },
+                                        leadingIcon = if (option == sortOption) {
+                                            {
+                                                Icon(
+                                                    Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = VaultPrimaryLight
+                                                )
+                                            }
+                                        } else {
+                                            null
+                                        }
+                                    )
+                                }
+                            }
                         }
                         IconButton(onClick = { showSettingsDialog = true }) {
                             Icon(Icons.Default.Settings, "Settings", tint = VaultOnSurfaceVariant)

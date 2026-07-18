@@ -61,6 +61,7 @@ import com.example.bib_vault.ui.theme.*
 import com.example.bib_vault.util.FormatUtils
 import com.example.bib_vault.util.MimeUtils
 import com.example.bib_vault.util.MediaType
+import com.example.bib_vault.util.VaultSortOption
 import com.example.bib_vault.vault.VaultEntry
 import com.example.bib_vault.vault.VaultHeader
 import android.net.Uri
@@ -266,8 +267,9 @@ fun MediaPlayerScreen(
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
-    val sortedEntries = remember(entries) {
-        entries.values.sortedWith(compareBy<VaultEntry> { it.addedTimestamp }.thenBy { it.fileName })
+    val sortOption = VaultSortOption.fromPrefs(context)
+    val sortedEntries = remember(entries, sortOption) {
+        sortOption.sort(entries.values.toList())
     }
     val imageEntries = remember(sortedEntries) {
         sortedEntries.filter { MimeUtils.getMediaType(it.mimeType) == MediaType.IMAGE }
