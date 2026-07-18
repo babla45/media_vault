@@ -38,10 +38,17 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.bib_vault.state.VaultState
 import com.example.bib_vault.state.VaultViewModel
+import com.example.bib_vault.ui.components.FoundVaultsDialog
 import com.example.bib_vault.ui.components.PasswordDialog
 import com.example.bib_vault.ui.navigation.Routes
 import com.example.bib_vault.ui.screens.*
 import com.example.bib_vault.ui.theme.Bib_vaultTheme
+import com.example.bib_vault.util.VaultFileFinder
+import com.example.bib_vault.util.VaultSaveLocation
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * Main entry point for BibVault.
@@ -131,15 +138,38 @@ private fun BibVaultApp() {
     var showOpenPasswordDialog by remember { mutableStateOf(false) }
     var showCreatePasswordDialog by remember { mutableStateOf(false) }
     var showExitVaultDialog by remember { mutableStateOf(false) }
+    var showFoundVaultsDialog by remember { mutableStateOf(false) }
+    var isScanningVaults by remember { mutableStateOf(false) }
+    var foundVaults by remember { mutableStateOf<List<VaultFileFinder.FoundVault>>(emptyList()) }
     var pendingVaultUri by remember { mutableStateOf<Uri?>(null) }
     var currentPassword by remember { mutableStateOf("") }
     var intentProcessed by rememberSaveable { mutableStateOf(false) }
     // Skip auto-lock while SAF / system pickers are open (they also stop the activity).
     var suppressAutoLock by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     fun launchWithAutoLockSuppressed(block: () -> Unit) {
         suppressAutoLock = true
         block()
+    }
+
+    fun startAutoFindVaults() {
+        showFoundVaultsDialog = true
+        isScanningVaults = true
+        foundVaults = emptyList()
+        coroutineScope.launch {
+            val results = withContext(Dispatchers.IO) {
+                VaultFileFinder.findVaultFiles()
+            }
+            foundVaults = results
+            isScanningVaults = false
+        }
+    }
+
+    fun openVaultFromFile(file: File) {
+        pendingVaultUri = Uri.fromFile(file)
+        showFoundVaultsDialog = false
+        showOpenPasswordDialog = true
     }
 
     DisposableEffect(activity) {
@@ -302,6 +332,18 @@ private fun BibVaultApp() {
         }
     }
 
+    fun launchOpenVaultPicker() {
+        try {
+            launchWithAutoLockSuppressed {
+                openVaultPicker.launch(arrayOf("*/*"))
+            }
+        } catch (e: android.content.ActivityNotFoundException) {
+            launchWithAutoLockSuppressed {
+                fallbackOpenVaultPicker.launch("*/*")
+            }
+        }
+    }
+
     // Create vault file (SAF save dialog)
     val createVaultSaver = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -389,14 +431,10 @@ private fun BibVaultApp() {
                         navController.navigate(Routes.CREATE_VAULT)
                     },
                     onOpenVault = {
-                        try {
-                            launchWithAutoLockSuppressed {
-                                openVaultPicker.launch(arrayOf("*/*"))
-                            }
-                        } catch (e: android.content.ActivityNotFoundException) {
-                            launchWithAutoLockSuppressed {
-                                fallbackOpenVaultPicker.launch("*/*")
-                            }
+                        if (AppPreferences.isAutoFindVaults(context)) {
+                            startAutoFindVaults()
+                        } else {
+                            launchOpenVaultPicker()
                         }
                     },
                     onSettings = {
@@ -432,8 +470,24 @@ private fun BibVaultApp() {
                         selectedFileInfo = selectedFileInfo.toMutableList().also { it.removeAt(index) }
                     },
                     onCreateVault = {
-                        launchWithAutoLockSuppressed {
-                            createVaultSaver.launch("vault.biv")
+                        if (AppPreferences.isCustomVaultSaveEnabled(context)) {
+                            val treeUri = AppPreferences.getCustomVaultSaveUri(context)
+                            val createdUri = treeUri?.let {
+                                VaultSaveLocation.createVaultInTree(context, it)
+                            }
+                            if (createdUri != null) {
+                                pendingVaultUri = createdUri
+                                showCreatePasswordDialog = true
+                            } else {
+                                // Missing/invalid folder — fall back to system save dialog
+                                launchWithAutoLockSuppressed {
+                                    createVaultSaver.launch("vault.biv")
+                                }
+                            }
+                        } else {
+                            launchWithAutoLockSuppressed {
+                                createVaultSaver.launch("vault.biv")
+                            }
                         }
                     },
                     onBack = {
@@ -562,6 +616,23 @@ private fun BibVaultApp() {
 
     // ── Password Dialogs ──
 
+    if (showFoundVaultsDialog) {
+        FoundVaultsDialog(
+            vaults = foundVaults,
+            isScanning = isScanningVaults,
+            onSelect = { vault -> openVaultFromFile(vault.file) },
+            onBrowseManually = {
+                showFoundVaultsDialog = false
+                launchOpenVaultPicker()
+            },
+            onDismiss = {
+                showFoundVaultsDialog = false
+                isScanningVaults = false
+                foundVaults = emptyList()
+            }
+        )
+    }
+
     // Open vault password dialog
     if (showOpenPasswordDialog) {
         PasswordDialog(
@@ -635,6 +706,7 @@ private fun BibVaultApp() {
         if (vaultState is VaultState.Unlocked) {
             showOpenPasswordDialog = false
             showCreatePasswordDialog = false
+            showFoundVaultsDialog = false
         }
     }
 }
