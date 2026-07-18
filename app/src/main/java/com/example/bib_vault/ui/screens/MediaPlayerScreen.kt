@@ -13,8 +13,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,6 +56,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.bib_vault.player.EncryptedDataSourceFactory
+import com.example.bib_vault.ui.components.ZoomableImage
 import com.example.bib_vault.ui.theme.*
 import com.example.bib_vault.util.FormatUtils
 import com.example.bib_vault.util.MimeUtils
@@ -1825,8 +1824,7 @@ private fun OtherVaultFileView(
 }
 
 /**
- * Image viewer with pinch-to-zoom, pan, double-tap to reset zoom, and swipe for prev/next.
- * Decrypts the image entirely in memory — no temp files.
+ * Image viewer: decrypt in memory, smooth zoom/pan, double-tap zoom, swipe prev/next, rotate.
  */
 @Composable
 private fun EncryptedImageViewer(
@@ -1839,32 +1837,29 @@ private fun EncryptedImageViewer(
     onSwipePrev: () -> Unit,
     onSwipeNext: () -> Unit
 ) {
-    var imageBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-
-    // Zoom/pan state
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
     var rotationDeg by remember { mutableFloatStateOf(0f) }
-    val swipeThreshold = 90f
-    val viewConfiguration = LocalViewConfiguration.current
 
     LaunchedEffect(entry.id) {
         isLoading = true
-        imageBytes = null
+        bitmap = null
         error = null
-        scale = 1f
-        offset = Offset.Zero
         rotationDeg = 0f
         try {
             val bytes = withContext(Dispatchers.IO) {
                 onDecryptImage(entry)
             }
-            if (bytes != null) {
-                imageBytes = bytes
-            } else {
+            if (bytes == null) {
                 error = "Failed to decrypt image"
+            } else {
+                bitmap = withContext(Dispatchers.Default) {
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }
+                if (bitmap == null) {
+                    error = "Could not decode image"
+                }
             }
         } catch (e: Exception) {
             error = "Error: ${e.message}"
@@ -1887,124 +1882,44 @@ private fun EncryptedImageViewer(
             error != null -> {
                 Text(error!!, color = VaultError)
             }
-            imageBytes != null -> {
-                val bitmap = remember(imageBytes) {
-                    BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes!!.size)
-                }
-
-                if (bitmap != null) {
-                    Box(
+            bitmap != null -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    ZoomableImage(
+                        bitmap = bitmap!!,
+                        contentDescription = entry.fileName,
                         modifier = Modifier
                             .fillMaxSize()
-                            .pointerInput(entry.id, scale, canSwipePrev, canSwipeNext) {
-                                if (scale > 1.05f) return@pointerInput
+                            .graphicsLayer { rotationZ = rotationDeg },
+                        canSwipePrev = canSwipePrev,
+                        canSwipeNext = canSwipeNext,
+                        onSwipePrev = onSwipePrev,
+                        onSwipeNext = onSwipeNext,
+                        onTap = onToggleChrome
+                    )
 
-                                val touchSlop = viewConfiguration.touchSlop
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(
-                                        requireUnconsumed = false,
-                                        pass = PointerEventPass.Initial
-                                    )
-                                    var totalX = 0f
-                                    var totalY = 0f
-                                    var pastSlop = false
-                                    var isSwipe = false
-
-                                    while (true) {
-                                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                                        if (event.changes.count { it.pressed } >= 2) break
-
-                                        val change = event.changes.find { it.id == down.id } ?: break
-                                        if (!change.pressed) {
-                                            if (isSwipe && abs(totalX) > abs(totalY)) {
-                                                when {
-                                                    totalX <= -swipeThreshold && canSwipeNext -> onSwipeNext()
-                                                    totalX >= swipeThreshold && canSwipePrev -> onSwipePrev()
-                                                }
-                                            }
-                                            break
-                                        }
-
-                                        val delta = change.positionChange()
-                                        if (delta != Offset.Zero) {
-                                            totalX += delta.x
-                                            totalY += delta.y
-                                            if (!pastSlop && hypot(totalX, totalY) > touchSlop) {
-                                                pastSlop = true
-                                                isSwipe = abs(totalX) > abs(totalY)
-                                                if (!isSwipe) break
-                                            }
-                                            if (isSwipe) {
-                                                change.consume()
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                    ) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = entry.fileName,
-                            contentScale = ContentScale.Fit,
+                    if (showNavButtons) {
+                        FilledIconButton(
+                            onClick = {
+                                rotationDeg = (rotationDeg - 90f + 360f) % 360f
+                            },
                             modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer(
-                                    scaleX = scale,
-                                    scaleY = scale,
-                                    rotationZ = rotationDeg,
-                                    translationX = offset.x,
-                                    translationY = offset.y
-                                )
-                                .pointerInput(entry.id) {
-                                    detectTapGestures(
-                                        onTap = { onToggleChrome() },
-                                        onDoubleTap = {
-                                            scale = 1f
-                                            offset = Offset.Zero
-                                        }
-                                    )
-                                }
-                                .pointerInput(scale) {
-                                    detectTransformGestures { _, pan, zoom, _ ->
-                                        val newScale = (scale * zoom).coerceIn(1f, 5f)
-                                        scale = newScale
-                                        offset = if (newScale <= 1.01f) {
-                                            Offset.Zero
-                                        } else {
-                                            Offset(
-                                                x = offset.x + pan.x,
-                                                y = offset.y + pan.y
-                                            )
-                                        }
-                                    }
-                                }
-                        )
-
-                        if (showNavButtons) {
-                            FilledIconButton(
-                                onClick = {
-                                    rotationDeg = (rotationDeg - 90f + 360f) % 360f
-                                },
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(top = 14.dp, end = 14.dp)
-                                    .size(44.dp),
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = Color.Black.copy(alpha = 0.45f),
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.RotateLeft,
-                                    contentDescription = "Rotate image 90 degrees anticlockwise"
-                                )
-                            }
+                                .align(Alignment.TopEnd)
+                                .padding(top = 14.dp, end = 14.dp)
+                                .size(44.dp),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = Color.Black.copy(alpha = 0.45f),
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.RotateLeft,
+                                contentDescription = "Rotate image 90 degrees anticlockwise"
+                            )
                         }
                     }
-                } else {
-                    Text("Could not decode image", color = VaultError)
                 }
             }
         }
     }
 }
+
