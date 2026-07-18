@@ -3,6 +3,7 @@ package com.example.bib_vault.state
 import android.net.Uri
 import com.example.bib_vault.vault.VaultEntry
 import com.example.bib_vault.vault.VaultHeader
+import com.example.bib_vault.vault.VaultIndexData
 import javax.crypto.SecretKey
 
 /**
@@ -30,7 +31,8 @@ sealed class VaultState {
         val vaultUri: Uri,
         val header: VaultHeader,
         val key: SecretKey,
-        val vaultName: String = "Vault"
+        val vaultName: String = "Vault",
+        val indexData: VaultIndexData = VaultIndexData(entries = emptyList())
     ) : VaultState()
 
     /** An error occurred */

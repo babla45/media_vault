@@ -147,6 +147,46 @@ object CryptoManager {
     }
 
     // ──────────────────────────────────────
+    //  Sensitive-password verifier
+    // ──────────────────────────────────────
+
+    private val SENSITIVE_VERIFIER_PAYLOAD =
+        "BIBVAULT_SENSITIVE".toByteArray(Charsets.UTF_8)
+
+    /**
+     * Create a salt + HMAC verifier for the sensitive-operations password.
+     * Uses HMAC-SHA256 (not PBKDF2) so verification stays fast on the UI thread;
+     * the verifier itself lives inside the encrypted vault index.
+     * Returns Pair(saltHex, verifierHex).
+     */
+    fun createSensitivePasswordVerifier(password: String): Pair<String, String> {
+        val salt = generateSalt()
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(salt, "HmacSHA256"))
+        mac.update(SENSITIVE_VERIFIER_PAYLOAD)
+        val verifier = mac.doFinal(password.toByteArray(Charsets.UTF_8))
+        return bytesToHex(salt) to bytesToHex(verifier)
+    }
+
+    /** Verify a sensitive-operations password against a stored salt/verifier pair. */
+    fun verifySensitivePassword(
+        password: String,
+        saltHex: String,
+        verifierHex: String
+    ): Boolean {
+        return try {
+            val salt = hexToBytes(saltHex)
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(salt, "HmacSHA256"))
+            mac.update(SENSITIVE_VERIFIER_PAYLOAD)
+            val computed = mac.doFinal(password.toByteArray(Charsets.UTF_8))
+            computed.contentEquals(hexToBytes(verifierHex))
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // ──────────────────────────────────────
     //  Hex encoding utilities
     // ──────────────────────────────────────
 

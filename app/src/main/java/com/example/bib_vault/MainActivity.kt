@@ -482,7 +482,9 @@ private fun BibVaultApp() {
                                     screenshotProtectionEnabled = true
                                     true
                                 } else {
-                                    if (!passwordForDisable.isNullOrEmpty() && passwordForDisable == currentPassword) {
+                                    if (!passwordForDisable.isNullOrEmpty() &&
+                                        viewModel.verifySensitivePassword(passwordForDisable, currentPassword)
+                                    ) {
                                         screenshotProtectionEnabled = false
                                         true
                                     } else {
@@ -492,6 +494,9 @@ private fun BibVaultApp() {
                             },
                             onVerifyVaultPassword = { enteredPassword ->
                                 enteredPassword.isNotBlank() && enteredPassword == currentPassword
+                            },
+                            onVerifySensitivePassword = { enteredPassword ->
+                                viewModel.verifySensitivePassword(enteredPassword, currentPassword)
                             },
                             onLock = {
                                 currentPassword = ""
@@ -563,7 +568,7 @@ private fun BibVaultApp() {
             isCreateMode = false,
             errorMessage = if (vaultState is VaultState.Error) (vaultState as VaultState.Error).message else null,
             isLoading = vaultState is VaultState.Loading,
-            onConfirm = { password ->
+            onConfirm = { password, _ ->
                 currentPassword = password
                 pendingVaultUri?.let { uri ->
                     viewModel.openVault(uri, password)
@@ -583,10 +588,10 @@ private fun BibVaultApp() {
             isCreateMode = true,
             errorMessage = if (vaultState is VaultState.Error) (vaultState as VaultState.Error).message else null,
             isLoading = vaultState is VaultState.Loading,
-            onConfirm = { password ->
+            onConfirm = { password, sensitivePassword ->
                 currentPassword = password
                 pendingVaultUri?.let { uri ->
-                    viewModel.createVault(uri, password, selectedFileUris)
+                    viewModel.createVault(uri, password, selectedFileUris, sensitivePassword)
                 }
                 showCreatePasswordDialog = false
             },

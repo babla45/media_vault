@@ -40,8 +40,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
      * @param vaultUri Destination URI for the .vault file
      * @param password User password
      * @param fileUris Source file URIs to encrypt
+     * @param sensitivePassword Optional second password for sensitive operations
      */
-    fun createVault(vaultUri: Uri, password: String, fileUris: List<Uri>) {
+    fun createVault(
+        vaultUri: Uri,
+        password: String,
+        fileUris: List<Uri>,
+        sensitivePassword: String? = null
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _vaultState.value = VaultState.Loading("Encrypting files...")
@@ -52,6 +58,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     vaultUri = vaultUri,
                     password = password,
                     fileUris = fileUris,
+                    sensitivePassword = sensitivePassword,
                     onProgress = { current, total ->
                         _progress.value = VaultProgress(current, total, "Encrypting file $current of $total...")
                     }
@@ -88,7 +95,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun openVaultInternal(vaultUri: Uri, password: String) {
-        val (header, entries) = VaultManager.openVault(
+        val (header, entries, indexData) = VaultManager.openVault(
             context = getApplication(),
             vaultUri = vaultUri,
             password = password
@@ -104,8 +111,23 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             vaultUri = vaultUri,
             header = header,
             key = key,
-            vaultName = vaultName
+            vaultName = vaultName,
+            indexData = indexData
         )
+    }
+
+    /**
+     * Verify the sensitive-operations password for the currently unlocked vault.
+     * Legacy vaults without a stored verifier fall back to comparing against [vaultPassword].
+     */
+    fun verifySensitivePassword(enteredPassword: String, vaultPassword: String): Boolean {
+        if (enteredPassword.isBlank()) return false
+        val state = _vaultState.value as? VaultState.Unlocked ?: return false
+        return if (state.indexData.hasSensitiveVerifier) {
+            VaultManager.verifySensitivePassword(enteredPassword, state.indexData)
+        } else {
+            enteredPassword == vaultPassword
+        }
     }
 
     /**

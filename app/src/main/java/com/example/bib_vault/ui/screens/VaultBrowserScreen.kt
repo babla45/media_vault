@@ -68,6 +68,7 @@ fun VaultBrowserScreen(
     screenshotProtectionEnabled: Boolean,
     onUpdateScreenshotProtection: (Boolean, String?) -> Boolean,
     onVerifyVaultPassword: (String) -> Boolean,
+    onVerifySensitivePassword: (String) -> Boolean,
     onLock: () -> Unit
 ) {
     val maxPreviewBytes = 25L * 1024L * 1024L
@@ -607,7 +608,7 @@ fun VaultBrowserScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Enter vault password to disable screenshot protection.",
+                        "Enter the second password to disable screenshot protection.",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     OutlinedTextField(
@@ -616,7 +617,7 @@ fun VaultBrowserScreen(
                             screenshotPassword = it
                             screenshotPasswordError = null
                         },
-                        label = { Text("Vault password") },
+                        label = { Text("Second password") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         isError = screenshotPasswordError != null,
@@ -640,7 +641,7 @@ fun VaultBrowserScreen(
                             screenshotPassword = ""
                             screenshotPasswordError = null
                         } else {
-                            screenshotPasswordError = "Wrong vault password"
+                            screenshotPasswordError = "Wrong second password"
                         }
                     }
                 ) {
@@ -754,7 +755,7 @@ fun VaultBrowserScreen(
                             restorePassword = it
                             restorePasswordError = null
                         },
-                        label = { Text("Vault password") },
+                        label = { Text("Second password") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         isError = restorePasswordError != null,
@@ -772,7 +773,7 @@ fun VaultBrowserScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (onVerifyVaultPassword(restorePassword)) {
+                        if (onVerifySensitivePassword(restorePassword)) {
                             onRestoreFiles(selectedEntries)
                             selectedIds.clear()
                             rangeSelectEnabled = false
@@ -781,7 +782,7 @@ fun VaultBrowserScreen(
                             restorePassword = ""
                             restorePasswordError = null
                         } else {
-                            restorePasswordError = "Wrong vault password"
+                            restorePasswordError = "Wrong second password"
                         }
                     }
                 ) {

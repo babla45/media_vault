@@ -6,6 +6,7 @@ import com.example.bib_vault.crypto.CryptoConstants
 import com.example.bib_vault.crypto.CryptoManager
 import com.example.bib_vault.util.MimeUtils
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -92,6 +93,8 @@ object VaultManager {
      * @param vaultUri Output URI for the .vault file (from SAF)
      * @param password User password for encryption
      * @param fileUris List of content URIs to encrypt into the vault
+     * @param sensitivePassword Password for sensitive ops (restore, disable screenshots).
+     *                         Defaults to [password] when null/blank.
      * @param onProgress Callback with (currentFile, totalFiles) for progress UI
      */
     fun createVault(
@@ -99,10 +102,15 @@ object VaultManager {
         vaultUri: Uri,
         password: String,
         fileUris: List<Uri>,
+        sensitivePassword: String? = null,
         onProgress: ((Int, Int) -> Unit)? = null
     ) {
         val salt = CryptoManager.generateSalt()
         val key = CryptoManager.deriveKey(password, salt)
+        val effectiveSensitivePassword =
+            if (sensitivePassword.isNullOrBlank()) password else sensitivePassword
+        val (sensitiveSaltHex, sensitiveVerifierHex) =
+            CryptoManager.createSensitivePasswordVerifier(effectiveSensitivePassword)
 
         // Phase 1: Encrypt all files into memory-buffered chunks
         // and build the entry index simultaneously
@@ -165,7 +173,12 @@ object VaultManager {
             }
 
         // Phase 2: Encrypt the index
-        val indexJson = entriesToJson(entries)
+        val indexData = VaultIndexData(
+            entries = entries,
+            sensitiveSaltHex = sensitiveSaltHex,
+            sensitiveVerifierHex = sensitiveVerifierHex
+        )
+        val indexJson = indexToJson(indexData)
         val indexIv = CryptoManager.generateGcmIv()
         val encryptedIndex = if (CryptoConstants.FORMAT_VERSION_CURRENT == CryptoConstants.FORMAT_VERSION_V2) {
             encryptIndexV2(key, indexIv, indexJson)
@@ -217,7 +230,7 @@ object VaultManager {
     /**
      * Open and decrypt a vault's file index.
      *
-     * @return Pair of (VaultHeader, List<VaultEntry>) on success
+     * @return Triple of (VaultHeader, List<VaultEntry>, VaultIndexData metadata) on success
      * @throws javax.crypto.AEADBadTagException if password is wrong
      * @throws IllegalStateException if the file is not a valid vault
      */
@@ -225,7 +238,7 @@ object VaultManager {
         context: Context,
         vaultUri: Uri,
         password: String
-    ): Pair<VaultHeader, List<VaultEntry>> {
+    ): Triple<VaultHeader, List<VaultEntry>, VaultIndexData> {
         var inputStream: java.io.InputStream? = null
         try {
             inputStream = context.contentResolver.openInputStream(vaultUri)
@@ -264,11 +277,24 @@ object VaultManager {
                     val indexBytes = CryptoManager.decryptIndex(key, header.indexIv, encryptedIndex)
                     String(indexBytes, Charsets.UTF_8)
                 }
-                val entries = entriesFromJson(indexJson)
+                val indexData = indexFromJson(indexJson)
 
-                return Pair(header, entries)
+                return Triple(header, indexData.entries, indexData)
             }
         }
+    }
+
+    /**
+     * Verify the sensitive-operations password for an unlocked vault's stored verifier.
+     * Legacy vaults without a verifier always return false (caller should fall back to vault password).
+     */
+    fun verifySensitivePassword(password: String, indexData: VaultIndexData): Boolean {
+        if (!indexData.hasSensitiveVerifier) return false
+        return CryptoManager.verifySensitivePassword(
+            password = password,
+            saltHex = indexData.sensitiveSaltHex!!,
+            verifierHex = indexData.sensitiveVerifierHex!!
+        )
     }
 
     /**
@@ -388,10 +414,12 @@ object VaultManager {
         newFileUris: List<Uri>,
         onProgress: ((Int, Int) -> Unit)? = null
     ) {
-        val (header, existingEntries) = openVault(context, vaultUri, password)
+        val (header, existingEntries, indexMeta) = openVault(context, vaultUri, password)
         if (header.version != CryptoConstants.FORMAT_VERSION_V2) {
             // v1 fallback: rewrite the entire vault (slow but compatible)
-            addFilesV1Rewrite(context, vaultUri, password, existingEntries, newFileUris, onProgress)
+            addFilesV1Rewrite(
+                context, vaultUri, password, existingEntries, newFileUris, onProgress, indexMeta
+            )
             return
         }
 
@@ -451,8 +479,13 @@ object VaultManager {
                 currentOffset += originalSize
             }
 
-            // Update index in-place (fast)
-            writeIndexV2InPlace(channel = ch, header = header, key = key, entries = updatedEntries)
+            // Update index in-place (fast), preserving sensitive-password metadata
+            writeIndexV2InPlace(
+                channel = ch,
+                header = header,
+                key = key,
+                indexData = indexMeta.copy(entries = updatedEntries)
+            )
         }
     }
 
@@ -468,16 +501,20 @@ object VaultManager {
         onProgress: ((Int, Int) -> Unit)? = null
     ) {
         if (entryIds.isEmpty()) return
-        val (header, existingEntries) = openVault(context, vaultUri, password)
+        val (header, existingEntries, indexMeta) = openVault(context, vaultUri, password)
         val idSet = entryIds.toSet()
         val keepEntries = existingEntries.filter { it.id !in idSet }
         if (keepEntries.size == existingEntries.size) return
 
         if (header.version != CryptoConstants.FORMAT_VERSION_V2) {
-            rewriteVaultV1KeepingEntries(context, vaultUri, password, header, keepEntries, onProgress)
+            rewriteVaultV1KeepingEntries(
+                context, vaultUri, password, header, keepEntries, onProgress, indexMeta
+            )
             return
         }
-        removeEntriesV2Compact(context, vaultUri, header, password, keepEntries, onProgress)
+        removeEntriesV2Compact(
+            context, vaultUri, header, password, keepEntries, onProgress, indexMeta
+        )
     }
 
     /**
@@ -503,7 +540,8 @@ object VaultManager {
         header: VaultHeader,
         password: String,
         keepEntries: List<VaultEntry>,
-        onProgress: ((Int, Int) -> Unit)?
+        onProgress: ((Int, Int) -> Unit)?,
+        indexMeta: VaultIndexData
     ) {
         val key = CryptoManager.deriveKey(password, header.salt)
         val dataSectionOffset = header.dataSectionOffset
@@ -533,7 +571,12 @@ object VaultManager {
             }
 
             withFileChannelRw(context, vaultUri) { ch ->
-                writeIndexV2InPlace(channel = ch, header = header, key = key, entries = reindexed)
+                writeIndexV2InPlace(
+                    channel = ch,
+                    header = header,
+                    key = key,
+                    indexData = indexMeta.copy(entries = reindexed)
+                )
                 ch.position(dataSectionOffset)
                 FileInputStream(tempFile).use { ins ->
                     val buf = ByteArray(1024 * 1024)
@@ -620,10 +663,10 @@ object VaultManager {
         channel: java.nio.channels.FileChannel,
         header: VaultHeader,
         key: SecretKey,
-        entries: List<VaultEntry>
+        indexData: VaultIndexData
     ) {
         // Write new header (with new IV) + reserved encrypted index region
-        val indexJson = entriesToJson(entries)
+        val indexJson = indexToJson(indexData)
         val newIndexIv = CryptoManager.generateGcmIv()
         val encryptedIndex = encryptIndexV2(key, newIndexIv, indexJson)
 
@@ -697,11 +740,12 @@ object VaultManager {
         password: String,
         existingEntries: List<VaultEntry>,
         newFileUris: List<Uri>,
-        onProgress: ((Int, Int) -> Unit)?
+        onProgress: ((Int, Int) -> Unit)?,
+        indexMeta: VaultIndexData
     ) {
         // Keep old behavior: fully re-create vault.
         // Note: this is intentionally slower; v2 vaults are fast.
-        val (header, _) = openVault(context, vaultUri, password)
+        val (header, _, _) = openVault(context, vaultUri, password)
         val key = CryptoManager.deriveKey(password, header.salt)
 
         val salt = CryptoManager.generateSalt()
@@ -787,7 +831,7 @@ object VaultManager {
                 }
             }
 
-            val indexJson = entriesToJson(entries)
+            val indexJson = indexToJson(indexMeta.copy(entries = entries))
             val indexIv = CryptoManager.generateGcmIv()
             val encryptedIndex = CryptoManager.encryptIndex(newKey, indexIv, indexJson.toByteArray(Charsets.UTF_8))
 
@@ -818,7 +862,8 @@ object VaultManager {
         password: String,
         header: VaultHeader,
         keepEntries: List<VaultEntry>,
-        onProgress: ((Int, Int) -> Unit)?
+        onProgress: ((Int, Int) -> Unit)?,
+        indexMeta: VaultIndexData
     ) {
         val key = CryptoManager.deriveKey(password, header.salt)
         val salt = CryptoManager.generateSalt()
@@ -856,7 +901,7 @@ object VaultManager {
                 }
             }
 
-            val indexJson = entriesToJson(newEntries)
+            val indexJson = indexToJson(indexMeta.copy(entries = newEntries))
             val indexIv = CryptoManager.generateGcmIv()
             val encryptedIndex = CryptoManager.encryptIndex(newKey, indexIv, indexJson.toByteArray(Charsets.UTF_8))
 
@@ -902,7 +947,7 @@ object VaultManager {
             ?: throw IllegalStateException("Cannot resolve vault parent directory")
         if (!outputDir.exists()) outputDir.mkdirs()
 
-        val (header, allEntries) = openVault(context, vaultUri, password)
+        val (header, allEntries, _) = openVault(context, vaultUri, password)
         val key = CryptoManager.deriveKey(password, header.salt)
         val targetEntries = allEntries.filter { it.id in entryIds.toSet() }
 
@@ -955,23 +1000,52 @@ object VaultManager {
         return VaultHeader(magic, version, salt, indexIv, indexSize)
     }
 
-    /** Serialize a list of entries to JSON string */
-    private fun entriesToJson(entries: List<VaultEntry>): String {
-        val jsonArray = JSONArray()
-        for (entry in entries) {
-            jsonArray.put(entry.toJson())
+    /**
+     * Serialize vault index. New vaults use an object with entries + sensitive verifier.
+     * Legacy readers that only understand arrays are handled via [indexFromJson].
+     */
+    private fun indexToJson(indexData: VaultIndexData): String {
+        val entriesArray = JSONArray()
+        for (entry in indexData.entries) {
+            entriesArray.put(entry.toJson())
         }
-        return jsonArray.toString()
+        // Always write object form so sensitive metadata is preserved
+        val root = JSONObject()
+        root.put("entries", entriesArray)
+        if (indexData.hasSensitiveVerifier) {
+            root.put("sensitiveSalt", indexData.sensitiveSaltHex)
+            root.put("sensitiveVerifier", indexData.sensitiveVerifierHex)
+        }
+        return root.toString()
     }
 
-    /** Deserialize entries from a JSON string */
-    private fun entriesFromJson(json: String): List<VaultEntry> {
-        val jsonArray = JSONArray(json)
-        val entries = mutableListOf<VaultEntry>()
-        for (i in 0 until jsonArray.length()) {
-            entries.add(VaultEntry.fromJson(jsonArray.getJSONObject(i)))
+    /**
+     * Deserialize index JSON. Supports legacy bare arrays and the newer object format.
+     */
+    private fun indexFromJson(json: String): VaultIndexData {
+        val trimmed = json.trim()
+        if (trimmed.startsWith("[")) {
+            val jsonArray = JSONArray(trimmed)
+            val entries = mutableListOf<VaultEntry>()
+            for (i in 0 until jsonArray.length()) {
+                entries.add(VaultEntry.fromJson(jsonArray.getJSONObject(i)))
+            }
+            return VaultIndexData(entries = entries)
         }
-        return entries
+
+        val root = JSONObject(trimmed)
+        val entriesArray = root.getJSONArray("entries")
+        val entries = mutableListOf<VaultEntry>()
+        for (i in 0 until entriesArray.length()) {
+            entries.add(VaultEntry.fromJson(entriesArray.getJSONObject(i)))
+        }
+        val salt = root.optString("sensitiveSalt", "").ifBlank { null }
+        val verifier = root.optString("sensitiveVerifier", "").ifBlank { null }
+        return VaultIndexData(
+            entries = entries,
+            sensitiveSaltHex = salt,
+            sensitiveVerifierHex = verifier
+        )
     }
 
     /** Extract the display filename from a content URI */
