@@ -28,6 +28,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -132,16 +134,57 @@ private fun BibVaultApp() {
     var pendingVaultUri by remember { mutableStateOf<Uri?>(null) }
     var currentPassword by remember { mutableStateOf("") }
     var intentProcessed by rememberSaveable { mutableStateOf(false) }
+    // Skip auto-lock while SAF / system pickers are open (they also stop the activity).
+    var suppressAutoLock by remember { mutableStateOf(false) }
+
+    fun launchWithAutoLockSuppressed(block: () -> Unit) {
+        suppressAutoLock = true
+        block()
+    }
+
+    DisposableEffect(activity) {
+        val owner = activity ?: return@DisposableEffect onDispose {}
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    suppressAutoLock = false
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    if (!AppPreferences.isLockOnBackground(context) || suppressAutoLock) {
+                        return@LifecycleEventObserver
+                    }
+                    if (viewModel.vaultState.value !is VaultState.Unlocked) {
+                        return@LifecycleEventObserver
+                    }
+                    val vaultUri = viewModel.getCurrentVaultUri()
+                    previewCache.clear()
+                    previewCacheVaultUri = null
+                    currentPassword = ""
+                    showExitVaultDialog = false
+                    if (vaultUri != null) {
+                        pendingVaultUri = vaultUri
+                        showOpenPasswordDialog = true
+                    }
+                    viewModel.lock()
+                }
+                else -> Unit
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
 
     // ── Process Incoming Intents & Permissions ──
     LaunchedEffect(Unit) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             if (!android.os.Environment.isExternalStorageManager()) {
                 try {
+                    suppressAutoLock = true
                     val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
                     intent.data = android.net.Uri.parse("package:${context.packageName}")
                     context.startActivity(intent)
                 } catch (e: Exception) {
+                    suppressAutoLock = true
                     val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                     context.startActivity(intent)
                 }
@@ -347,9 +390,13 @@ private fun BibVaultApp() {
                     },
                     onOpenVault = {
                         try {
-                            openVaultPicker.launch(arrayOf("*/*"))
+                            launchWithAutoLockSuppressed {
+                                openVaultPicker.launch(arrayOf("*/*"))
+                            }
                         } catch (e: android.content.ActivityNotFoundException) {
-                            fallbackOpenVaultPicker.launch("*/*")
+                            launchWithAutoLockSuppressed {
+                                fallbackOpenVaultPicker.launch("*/*")
+                            }
                         }
                     },
                     onSettings = {
@@ -371,9 +418,13 @@ private fun BibVaultApp() {
                     isProcessing = vaultState is VaultState.Loading,
                     onAddFiles = {
                         try {
-                            createFilePicker.launch(arrayOf("*/*"))
+                            launchWithAutoLockSuppressed {
+                                createFilePicker.launch(arrayOf("*/*"))
+                            }
                         } catch (e: android.content.ActivityNotFoundException) {
-                            fallbackCreateFilePicker.launch("*/*")
+                            launchWithAutoLockSuppressed {
+                                fallbackCreateFilePicker.launch("*/*")
+                            }
                         }
                     },
                     onRemoveFile = { index ->
@@ -381,7 +432,9 @@ private fun BibVaultApp() {
                         selectedFileInfo = selectedFileInfo.toMutableList().also { it.removeAt(index) }
                     },
                     onCreateVault = {
-                        createVaultSaver.launch("vault.biv")
+                        launchWithAutoLockSuppressed {
+                            createVaultSaver.launch("vault.biv")
+                        }
                     },
                     onBack = {
                         navController.popBackStack()
@@ -410,9 +463,13 @@ private fun BibVaultApp() {
                         },
                             onAddFiles = {
                                 try {
-                                    addFilePicker.launch(arrayOf("*/*"))
+                                    launchWithAutoLockSuppressed {
+                                        addFilePicker.launch(arrayOf("*/*"))
+                                    }
                                 } catch (e: android.content.ActivityNotFoundException) {
-                                    fallbackAddFilePicker.launch("*/*")
+                                    launchWithAutoLockSuppressed {
+                                        fallbackAddFilePicker.launch("*/*")
+                                    }
                                 }
                             },
                             previewCache = previewCache,
